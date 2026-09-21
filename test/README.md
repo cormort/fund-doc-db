@@ -21,7 +21,13 @@ const f = new File([await (await fetch('./test/fixtures/two-column.pdf')).blob()
 const out = []; await p.parsePdf(f, out, '作業基金', '115'); console.log(out[0]);
 ```
 
-預期：警告列出「雙欄版面已重排」與「已移除重複頁首／頁尾」，內容為左欄 0–7 全部在右欄 0–7 之前。
+預期：警告列出「雙欄版面已重排」與「已移除重複頁首／頁尾」，內容為左欄 0–9 全部排在右欄 0–9 之前。
+
+`budget-table.pdf`（3 頁、一欄科目兩欄金額）換成同樣的呼叫，預期改為警告「疑似表格，維持逐列讀取」，
+且內容保持 `Item0 10000 20000` 的逐列順序，不被拆成先讀完整欄。
 
 單元層級可直接餵假的 text item（`{str, width, height, transform}`）給 `extractPageLines(items, pageWidth)`
 與 `stripRunningLines(pages, warnings)`，驗證三種版面：真雙欄要判 2、單欄整行與「單行被切成兩片段」都要判 1。
+
+表格判定（`looksLikeTable(items, pageWidth)`）三條件任一成立即視為表格：
+三個以上欄位起點在 60% 的列上對齊、任一側文字平均填滿度低於欄寬 60%、或右側 60% 的列為純數字。

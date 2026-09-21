@@ -26,6 +26,7 @@ export async function parsePdf(file, targetArray, fundType, budgetYear) {
                 const warnings = [];
                 const emptyPages = [];
                 const twoColumnPages = [];
+                const tablePages = [];
                 const pages = [];
 
                 for (let pageNo = 1; pageNo <= pdf.numPages; pageNo++) {
@@ -33,8 +34,9 @@ export async function parsePdf(file, targetArray, fundType, budgetYear) {
                     const items = (await page.getTextContent()).items.filter(i => i.str.trim());
                     if (!items.length) { emptyPages.push(pageNo); continue; }
 
-                    const { lines, columns } = extractPageLines(items, page.getViewport({ scale: 1 }).width);
+                    const { lines, columns, table } = extractPageLines(items, page.getViewport({ scale: 1 }).width);
                     if (columns > 1) twoColumnPages.push(pageNo);
+                    if (table) tablePages.push(pageNo);
                     pages.push({ page: pageNo, lines });
                 }
 
@@ -43,6 +45,9 @@ export async function parsePdf(file, targetArray, fundType, budgetYear) {
                 }
                 if (twoColumnPages.length) {
                     warnings.push(`第 ${twoColumnPages.join('、')} 頁偵測為雙欄版面，已依左欄、右欄順序重排`);
+                }
+                if (tablePages.length) {
+                    warnings.push(`第 ${tablePages.join('、')} 頁疑似表格，維持逐列讀取（未重排欄位），內容可能需人工核對`);
                 }
                 extractData(stripRunningLines(pages, warnings), file.name, targetArray, fundType, budgetYear, warnings);
                 resolve();
@@ -59,11 +64,12 @@ export async function parsePdf(file, targetArray, fundType, budgetYear) {
 // 將單頁文字片段合併成行；偵測雙欄版面時，左右欄各自成行再依序輸出。
 export function extractPageLines(items, pageWidth) {
     const lineGap = medianHeight(items) * 0.6;
-    const columns = detectColumns(items, pageWidth);
+    const rowWise = () => ({ lines: buildLines(items, lineGap).map(l => l.text), columns: 1 });
 
-    if (columns < 2) {
-        return { lines: buildLines(items, lineGap).map(l => l.text), columns: 1 };
-    }
+    if (detectColumns(items, pageWidth) < 2) return rowWise();
+
+    // 表格同樣有欄間空白，但欄位必須逐列一起讀，重排會拆散同一列資料。
+    if (looksLikeTable(items, pageWidth)) return { ...rowWise(), table: true };
 
     // ponytail: 假設跨欄的行是頁面上方標題；若正文中間插入跨欄標題會被排到最前面，
     // 屆時再改成以跨欄行切分區塊（band）處理。
@@ -77,6 +83,46 @@ export function extractPageLines(items, pageWidth) {
         lines: [spanning, left, right].flatMap(group => buildLines(group, lineGap).map(l => l.text)),
         columns: 2
     };
+}
+
+// 表格判定：欄位起點在各列對齊（三欄以上必為表格），或欄內文字短而參差、以數字為主。
+export function looksLikeTable(items, pageWidth) {
+    const tolerance = Math.max(medianHeight(items) * 0.5, 3);
+    const lines = buildLines(items, medianHeight(items) * 0.6).filter(l => !l.items.some(i => isSpanning(i, pageWidth)));
+    if (lines.length < 3) return false;
+
+    // 1) 欄位起點叢集：多數列都在同樣的 x 位置開始 → 表格欄位
+    const anchors = [];
+    lines.forEach(line => {
+        const starts = [...new Set(line.items.map(itemLeft))];
+        starts.forEach(x => {
+            const hit = anchors.find(a => Math.abs(a.x - x) <= tolerance);
+            if (hit) { hit.lines.add(line); } else { anchors.push({ x, lines: new Set([line]) }); }
+        });
+    });
+    const sharedAnchors = anchors.filter(a => a.lines.size >= lines.length * 0.6).length;
+    if (sharedAnchors >= 3) return true;
+
+    // 2) 兩欄時看欄內文字是否填滿欄寬：正文會接近填滿，表格儲存格短而參差
+    const mid = pageWidth / 2;
+    const sideFill = side => {
+        const rows = lines.map(l => l.items.filter(i => side === 'left' ? itemRight(i) <= mid : itemLeft(i) >= mid))
+                          .filter(cells => cells.length);
+        if (rows.length < 3) return 1;
+        const colStart = Math.min(...rows.flat().map(itemLeft));
+        const colEnd = Math.max(...rows.flat().map(itemRight));
+        const width = colEnd - colStart || 1;
+        return rows.reduce((sum, cells) =>
+            sum + (Math.max(...cells.map(itemRight)) - Math.min(...cells.map(itemLeft))) / width, 0) / rows.length;
+    };
+    if (Math.min(sideFill('left'), sideFill('right')) < 0.6) return true;
+
+    // 3) 右側多為數字（預算金額表常見）
+    const numericRows = lines.filter(line => {
+        const text = line.items.filter(i => itemLeft(i) >= mid).map(i => i.str).join('').trim();
+        return text && /^[\d\s.,()%\-–—]+$/.test(text);
+    }).length;
+    return numericRows >= lines.length * 0.6;
 }
 
 function medianHeight(items) {
@@ -111,7 +157,7 @@ function buildLines(items, lineGap) {
 }
 
 // 雙欄判定：多數文字行在版面中央留有連續的欄間空白（gutter），而不是被切成兩段的單欄文字。
-// ponytail: 兩欄式表格同樣具備 gutter，會被判為雙欄而重排；真的遇到再以表格線或欄數（>2）另外排除。
+// ponytail: 欄間空白小於 2% 頁寬（A4 約 12pt）的緊排雙欄不會被判出，會維持逐列讀取；遇到再依字寬調整門檻。
 function detectColumns(items, pageWidth) {
     if (!pageWidth || items.length < 8) return 1;
     const mid = pageWidth / 2;
