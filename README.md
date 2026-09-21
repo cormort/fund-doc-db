@@ -21,3 +21,18 @@ js/ui.js          事件綁定與進入點（ES module entry）
 ```
 
 以原生 ES modules 載入，無建置步驟；直接以任何靜態伺服器開啟即可（`python3 -m http.server`）。
+
+## JSON 格式（schemaVersion 2.0）
+
+```json
+{
+  "schemaVersion": "2.0",
+  "application": "基金文件結構化資料庫",
+  "exportedAt": "2026-09-21T10:00:00.000Z",
+  "recordCount": 344,
+  "funds": [ { "fundName": "...", "budgetYear": "115", "fundType": "作業基金", "sourceFile": "...", "structured": [] } ]
+}
+```
+
+匯入同時相容舊格式（根層級直接是陣列）。重複資料以「年度＋屬性＋基金名稱」判定，可選擇
+**取代**（預設，寫入 `updatedAt`）、**略過**或**兩者都保留**；內容完全相同者一律略過。

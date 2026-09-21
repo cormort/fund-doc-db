@@ -1,8 +1,48 @@
 // 資料庫：JSON 驗證、匯入合併、匯出 JSON／Excel、資料摘要
-import { exportExcelBtn, exportJsonBtn, fileList, globalControlsPanel, loader } from './dom.js';
+import { exportExcelBtn, exportJsonBtn, fileList, globalControlsPanel, importStrategy, loader } from './dom.js';
 import { normalizeFundName } from './parsers.js';
 import { initializeFilters } from './query.js';
 import { appState, markDirty, showToast } from './state.js';
+
+export const SCHEMA_VERSION = '2.0';
+export const APPLICATION_NAME = '基金文件結構化資料庫';
+
+// 紀錄識別碼：同一年度、同一屬性、同一基金視為同一筆業務資料。
+function recordId(fund) {
+    return [fund.budgetYear || '', fund.fundType || '', fund.fundName || ''].join('||');
+}
+
+// 內容指紋：識別碼相同且 structured 內容完全一致時，視為同一版本。
+function contentFingerprint(fund) {
+    return JSON.stringify((fund.structured || []).map(i => [i.main, i.sub, i.subSub, i.content]));
+}
+
+// strategy: replace（後匯入者取代）／skip（保留既有）／keep（兩者都留）
+export function mergeFunds(existing, incoming, strategy = 'replace') {
+    const funds = [...existing];
+    const indexById = new Map(funds.map((f, i) => [recordId(f), i]));
+    let added = 0, updated = 0, skipped = 0, kept = 0;
+
+    incoming.forEach(fund => {
+        const id = recordId(fund);
+        const at = indexById.get(id);
+        if (at === undefined) {
+            indexById.set(id, funds.push(fund) - 1);
+            added++;
+        } else if (contentFingerprint(funds[at]) === contentFingerprint(fund)) {
+            skipped++;               // 內容完全相同，任何策略都不需要動作
+        } else if (strategy === 'skip') {
+            skipped++;
+        } else if (strategy === 'keep') {
+            funds.push(fund);
+            kept++;
+        } else {
+            funds[at] = { ...fund, updatedAt: new Date().toISOString() };
+            updated++;
+        }
+    });
+    return { funds, added, updated, skipped, kept };
+}
 
 // 匯入階段就把資料標準化，避免查詢時才因欄位型別異常而中斷。
 export function validateAndNormalizeFund(rawFund, fileName, index) {
@@ -26,6 +66,7 @@ export function validateAndNormalizeFund(rawFund, fileName, index) {
         fundType: String(rawFund.fundType ?? '').trim(),
         sourceFile: String(rawFund.sourceFile ?? fileName).trim(),
         structured,
+        ...(rawFund.updatedAt ? { updatedAt: String(rawFund.updatedAt) } : {}),
         isDataSet: true
     });
 }
@@ -55,20 +96,14 @@ export async function importJsonFiles(fileListInput) {
     const results = await Promise.allSettled(files.map(readJsonFile));
     const incoming = results.filter(r => r.status === 'fulfilled').flatMap(r => r.value);
     const errors = results.filter(r => r.status === 'rejected').map(r => r.reason.message);
-    // 以「年度＋屬性＋基金名稱」作為紀錄識別碼；同一筆基金若再次匯入，以較新版本取代舊版本。
-    // ponytail: 單純「後蓋前」，不做三選一策略；真要保留多版本再加 UI。
-    const byId = new Map();
-    let replaced = 0;
-    [...appState.funds, ...incoming].forEach(fund => {
-        const id = [fund.budgetYear || '', fund.fundType || '', fund.fundName || ''].join('||');
-        if (byId.has(id)) replaced++;
-        byId.set(id, fund);
-    });
-    appState.funds = [...byId.values()];
+    const { funds, added, updated, skipped, kept } = mergeFunds(appState.funds, incoming, importStrategy?.value || 'replace');
+    appState.funds = funds;
     loader.style.display = 'none';
     globalControlsPanel.style.display = appState.pendingFiles.length ? 'flex' : 'none';
-    markDirty();
-    fileList.innerHTML = `<p style="color:var(--success-color)">✓ 已讀取 ${files.length} 個 JSON，讀入 ${incoming.length} 筆，取代重複 ${replaced} 筆，合併後共 ${appState.funds.length} 筆。</p>` +
+    if (added || updated || kept) markDirty();
+    const detail = [`新增 ${added}`, updated ? `更新 ${updated}` : '', skipped ? `略過 ${skipped}` : '', kept ? `保留重複 ${kept}` : '']
+        .filter(Boolean).join('、');
+    fileList.innerHTML = `<p style="color:var(--success-color)">✓ 已讀取 ${files.length} 個 JSON，共 ${incoming.length} 筆（${detail}），目前資料庫 ${appState.funds.length} 筆。</p>` +
         (errors.length ? `<p style="color:var(--danger-color)">⚠ ${errors.join('<br>')}</p>` : '');
     if (appState.funds.length) initializeFilters();
     updateDataSummary();
@@ -92,7 +127,13 @@ exportJsonBtn.addEventListener('click', () => {
         alert("目前資料庫沒有可儲存的資料。");
         return;
     }
-    const dataToExport = appState.funds.map(({ isDataSet, ...rest }) => rest);
+    const dataToExport = {
+        schemaVersion: SCHEMA_VERSION,
+        application: APPLICATION_NAME,
+        exportedAt: new Date().toISOString(),
+        recordCount: appState.funds.length,
+        funds: appState.funds.map(({ isDataSet, ...rest }) => rest)
+    };
     const jsonString = JSON.stringify(dataToExport, null, 2);
     const blob = new Blob([jsonString], { type: 'application/json' });
     const url = URL.createObjectURL(blob);

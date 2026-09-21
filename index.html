@@ -25,6 +25,12 @@
                 <div class="drop-icon">⇧</div><p><strong>建立或載入資料庫</strong></p><p class="drop-hint">拖曳多個 Word／PDF 建立資料，或載入 JSON 資料庫</p>
                  <small style="color: var(--dark-gray);">.doc 格式不支援，請先另存為 .docx</small>
             </div>
+            <label for="import-strategy" class="import-strategy-label">匯入重複資料時：</label>
+            <select id="import-strategy" class="import-strategy">
+                <option value="replace" selected>以新資料取代舊版本</option>
+                <option value="skip">略過已存在的基金</option>
+                <option value="keep">兩者都保留</option>
+            </select>
             <div class="io-buttons">
                 <button class="btn btn-secondary" id="import-json-btn" style="flex-basis: 48%;">載入 JSON 資料庫</button>
                 <button class="btn btn-primary" id="export-json-btn" style="flex-basis: 48%;">儲存 JSON 資料庫</button>
