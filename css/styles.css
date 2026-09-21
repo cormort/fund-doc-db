@@ -261,3 +261,8 @@
 
 .autosave-toggle { display: flex; align-items: center; gap: 6px; margin-top: 12px; font-size: 14px; }
 .autosave-hint { margin: 4px 0 0; font-size: 12px; color: var(--dark-gray); line-height: 1.5; }
+
+.doc-hint { margin-top: 10px; padding: 10px 12px; border-left: 3px solid #e67e22; background: var(--light-gray); border-radius: 4px; font-size: 13px; }
+.doc-hint p { margin: 6px 0; color: var(--secondary-color); line-height: 1.6; }
+.doc-hint code { display: block; padding: 8px; background: #2d3436; color: #dfe6e9; border-radius: 4px; font-size: 12px; word-break: break-all; }
+.doc-hint-copy { margin-top: 8px; padding: 4px 12px; font-size: 12px; }

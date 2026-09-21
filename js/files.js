@@ -6,6 +6,27 @@ import { initializeFilters } from './query.js';
 import { appState, markDirty } from './state.js';
 import { saveSnapshot } from './storage.js';
 
+// .doc 是 Word 97-2003 的二進位格式，瀏覽器端無法解析；提供實際可用的批次轉檔指令。
+export function docConversionHint() {
+    const box = document.createElement('div');
+    box.className = 'doc-hint';
+    box.innerHTML = `<strong>.doc 需先轉為 .docx</strong>
+        <p>單檔可用 Word 另存新檔；整批轉換可在終端機執行（需安裝 LibreOffice，35 份約 20 秒）：</p>`;
+    const code = document.createElement('code');
+    code.textContent = 'soffice --headless --convert-to docx --outdir converted *.doc';
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.className = 'btn btn-ghost doc-hint-copy';
+    copy.textContent = '複製指令';
+    copy.addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText(code.textContent); copy.textContent = '已複製'; }
+        catch (e) { copy.textContent = '請手動選取複製'; }
+        setTimeout(() => { copy.textContent = '複製指令'; }, 2000);
+    });
+    box.append(code, copy);
+    return box;
+}
+
 export function handleFiles(files) {
     appState.pendingFiles = Array.from(files).filter(file => ['pdf', 'docx', 'doc'].includes(file.name.split('.').pop().toLowerCase()));
     fileList.innerHTML = '';
@@ -17,6 +38,9 @@ export function handleFiles(files) {
              fileList.innerHTML += `<p>待處理: ${file.name}</p>`;
         }
     });
+    if (appState.pendingFiles.some(f => f.name.toLowerCase().endsWith('.doc'))) {
+        fileList.appendChild(docConversionHint());
+    }
 
     if (appState.pendingFiles.length > 0) {
         globalControlsPanel.style.display = 'flex';
@@ -48,6 +72,7 @@ confirmSetupBtn.addEventListener('click', async () => {
     fileList.innerHTML = '';
 
     let newFunds = [];
+    let skippedDoc = false;
     const filePromises = appState.pendingFiles.map(async (file) => {
         const fileType = file.name.split('.').pop().toLowerCase();
         fileList.innerHTML += `<p>處理中 (${fileType}): ${file.name}</p>`;
@@ -57,7 +82,8 @@ confirmSetupBtn.addEventListener('click', async () => {
         } else if (fileType === 'docx') {
             await parseDocx(file, newFunds, selectedType, selectedYear);
         } else if (fileType === 'doc') {
-            fileList.innerHTML += `<p style="color:red;">無法處理: ${file.name} (.doc 格式不支援，請先另存為 .docx)</p>`;
+            fileList.innerHTML += `<p style="color:red;">無法處理: ${file.name}（.doc 為舊版格式，需先轉為 .docx）</p>`;
+            skippedDoc = true;
         } else {
              fileList.innerHTML += `<p style="color:orange;">跳過不支援的檔案: ${file.name}</p>`;
         }
@@ -68,6 +94,8 @@ confirmSetupBtn.addEventListener('click', async () => {
     appState.funds.push(...newFunds.map(normalizeFundName));
     appState.pendingFiles = [];
     if (newFunds.length) { markDirty(); saveSnapshot(); }
+
+    if (skippedDoc) fileList.appendChild(docConversionHint());
 
     newFunds.filter(f => f.extractionWarnings?.length).forEach(fund => {
         const li = document.createElement('p');

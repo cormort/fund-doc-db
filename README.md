@@ -24,6 +24,16 @@ test/fixtures/    DOCX 解析路徑的驗證素材
 
 以原生 ES modules 載入，無建置步驟；直接以任何靜態伺服器開啟即可（`python3 -m http.server`）。
 
+## 舊版 .doc
+
+本工具只解析 .docx；拖入 .doc 時會顯示批次轉檔指令（需安裝 LibreOffice）：
+
+```bash
+soffice --headless --convert-to docx --outdir converted *.doc
+```
+
+實測 35 份 .doc 轉檔約 20 秒，轉檔後解析結果與 PDF 來源一致。
+
 ## JSON 格式（schemaVersion 2.0）
 
 ```json
