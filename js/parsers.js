@@ -38,7 +38,12 @@ export async function parsePdf(file, targetArray, fundType, budgetYear) {
                     const { lines, columns, table } = extractPageLines(items, viewport.width);
                     if (columns > 1) twoColumnPages.push(pageNo);
                     if (table) tablePages.push(pageNo);
-                    pages.push({ page: pageNo, height: viewport.height, lines });
+                    pages.push({
+                        page: pageNo,
+                        height: viewport.height,
+                        lines,
+                        cells: items.map(i => ({ s: i.str, x: itemLeft(i), y: i.transform[5], w: i.width || 0, page: pageNo }))
+                    });
                 }
 
                 if (emptyPages.length) {
@@ -50,7 +55,8 @@ export async function parsePdf(file, targetArray, fundType, budgetYear) {
                 if (tablePages.length) {
                     warnings.push(`第 ${tablePages.join('、')} 頁疑似表格，維持逐列讀取（未重排欄位），內容可能需人工核對`);
                 }
-                extractData(stripRunningLines(pages, warnings), file.name, targetArray, fundType, budgetYear, warnings);
+                extractData(stripRunningLines(pages, warnings), file.name, targetArray, fundType, budgetYear, warnings,
+                    pages.flatMap(pg => pg.cells));
                 resolve();
             } catch (error) {
                 console.error('解析 PDF 時發生錯誤:', file.name, error);
@@ -65,7 +71,8 @@ export async function parsePdf(file, targetArray, fundType, budgetYear) {
 // 將單頁文字片段合併成行；偵測雙欄版面時，左右欄各自成行再依序輸出。
 export function extractPageLines(items, pageWidth) {
     const lineGap = medianHeight(items) * 0.6;
-    const rowWise = () => ({ lines: buildLines(items, lineGap).map(({ text, y }) => ({ text, y })), columns: 1 });
+    const toLine = ({ text, y, items: parts }) => ({ text, y, cells: parts.map(i => ({ s: i.str, x: itemLeft(i), w: i.width || 0 })) });
+    const rowWise = () => ({ lines: buildLines(items, lineGap).map(toLine), columns: 1 });
 
     const gutter = findGutter(items, pageWidth);
     if (!gutter) return rowWise();
@@ -81,7 +88,7 @@ export function extractPageLines(items, pageWidth) {
     const right = rest.filter(i => itemRight(i) > gutter.end);
 
     return {
-        lines: [spanning, left, right].flatMap(group => buildLines(group, lineGap).map(({ text, y }) => ({ text, y }))),
+        lines: [spanning, left, right].flatMap(group => buildLines(group, lineGap).map(toLine)),
         columns: 2
     };
 }
@@ -225,7 +232,7 @@ export function stripRunningLines(pages, warnings = []) {
             const text = typeof line === 'string' ? line : line.text;
             const margin = typeof line === 'string' ? false : inMargin(line, height);
             if (margin && (repeated.has(runningKey(text)) || PAGE_NUMBER_ONLY.test(text))) return;
-            out.push({ text, page, level: 0 });
+            out.push({ text, page, level: 0, cells: line.cells });
         });
     });
 
@@ -289,7 +296,7 @@ export function toLines(text) {
         .map(text => ({ text, page: null, level: 0 }));
 }
 
-export function extractData(input, fileName, targetArray, fundType, budgetYear, warnings = []) {
+export function extractData(input, fileName, targetArray, fundType, budgetYear, warnings = [], tableCells = null) {
     const regexSet = REGEX_SETS[fundType] || REGEX_SETS['作業基金'];
     const { main: mainTitleRegex, sub: subTitleRegex, subSub: subSubTitleRegex, sectionTwoIdentifier } = regexSet;
 
@@ -318,6 +325,11 @@ export function extractData(input, fileName, targetArray, fundType, budgetYear, 
     let currentMain = '', currentSub = '', currentSubSub = '';
     let contentBuffer = [];
     let sectionPage = allLines[startIndex]?.page ?? null;
+    // 「二、」表格：只有 PDF 帶得出文字座標，Word 仍維持原本的佔位字串。
+    const sectionTwoTable = tableCells ? extractTable(tableCells) : null;
+    if (sectionTwoTable && sectionTwoTable.issues.length) {
+        warnings.push(`表格有 ${sectionTwoTable.issues.length} 個數值格式異常，請核對：${sectionTwoTable.issues.slice(0, 2).join('、')}`);
+    }
 
     function pushContent() {
         if (!currentMain && !currentSub && !currentSubSub && contentBuffer.length === 0) return;
@@ -326,7 +338,7 @@ export function extractData(input, fileName, targetArray, fundType, budgetYear, 
         if (currentMain) {
             const isSectionTwo = sectionTwoIdentifier.test(currentMain);
             if (isSectionTwo && currentSub === '' && currentSubSub === '') {
-                content = "[表格內容，已於程式中略過]";
+                content = sectionTwoTable ? sectionTwoTable.text : "[表格內容，已於程式中略過]";
             } else if (content) {
                 content = content.replace(/。/g, '。\n');
             }
@@ -363,6 +375,9 @@ export function extractData(input, fileName, targetArray, fundType, budgetYear, 
     pushContent();
 
     const structured = flatData.filter(item => item.main || item.sub || item.subSub || item.content);
+    if (tableCells && !sectionTwoTable && structured.some(item => sectionTwoIdentifier.test(item.main))) {
+        warnings.push('「二、最近5年主要營運項目」表格無法解析，內容以佔位字串取代');
+    }
     if (!structured.some(item => item.main)) warnings.push('未辨識到任何大標題，階層可能不完整');
 
     targetArray.push({
@@ -373,6 +388,129 @@ export function extractData(input, fileName, targetArray, fundType, budgetYear, 
         extractionWarnings: warnings,
         isDataSet: true
     });
+}
+
+// ---- 「二、最近5年主要營運項目」表格解析 ----
+// 表格以座標還原：年度標題列與「決算數／預算數」列給出欄位錨點，數值靠右對齊於各欄之內。
+const YEAR_HEADER = /^(\d{2,3}年度){2,}$/;
+const KIND_HEADER = /^(決算數|預算數)+$/;
+const ITEM_UNIT_HEADER = /^項目單位$/;
+const VALUE_PATTERN = /^(-|—|－|\d{1,3}(,\d{3})*(\.\d+)?|\(\d[\d,]*\))$/;
+const strip = text => String(text).replace(/\s/g, '');
+
+// 以已知欄數自我校驗的 x 分群：找出能剛好切出 expected 欄的間距門檻。
+function clusterByGap(cells, expected) {
+    const sorted = [...cells].sort((a, b) => a.x - b.x);
+    for (const gap of [20, 25, 30, 35, 40, 45, 50]) {
+        const out = [];
+        let current = null;
+        sorted.forEach(c => {
+            if (!current || c.x - current.x > gap) { current = { x: c.x, parts: [c.s] }; out.push(current); }
+            else current.parts.push(c.s);
+        });
+        if (out.length === expected) return out;
+    }
+    return null;
+}
+
+// 同列換行 vs 換列：行距通常呈雙峰，取兩群之間當分界。
+function rowGapLimit(gaps, fallback = 12) {
+    const sorted = gaps.filter(g => g >= 4).sort((a, b) => a - b);
+    if (sorted.length < 2) return fallback;
+    let best = { ratio: 1, at: -1 };
+    for (let i = 1; i < sorted.length; i++) {
+        const ratio = sorted[i] / sorted[i - 1];
+        if (ratio > best.ratio) best = { ratio, at: i };
+    }
+    return best.ratio >= 1.6 ? (sorted[best.at] + sorted[best.at - 1]) / 2 : fallback;
+}
+
+function columnOf(centre, anchors, spacing, unitAnchor) {
+    const lead = spacing * 0.1;   // 數字偶爾比欄寬略長，左緣容許一點溢出
+    if (centre < unitAnchor - 10) return 'item';
+    if (centre < anchors[0] - lead) return 'unit';
+    let k = 0;
+    anchors.forEach((a, i) => { if (centre >= a - lead) k = i; });
+    return k;
+}
+
+// 從整份文件的原始文字座標中，解析「二、」與「三、」之間的表格。
+// 產出 { text, issues, rows }；抓不到表格結構時回傳 null。
+export function extractTable(cells) {
+    if (!Array.isArray(cells) || !cells.length) return null;
+
+    // 依「頁＋y」還原視覺列（各頁 y 座標各自獨立）
+    const byLine = new Map();
+    cells.filter(c => c.s.trim()).forEach(c => {
+        const key = `${c.page || 1}:${Math.round(c.y)}`;
+        if (!byLine.has(key)) byLine.set(key, []);
+        byLine.get(key).push(c);
+    });
+    const allRows = [...byLine.values()]
+        .map(cs => ({ page: cs[0].page || 1, y: cs[0].y, cells: cs.sort((a, b) => a.x - b.x), txt: strip(cs.map(c => c.s).join('')) }))
+        .sort((a, b) => (a.page - b.page) || (b.y - a.y));
+
+    // 取出「二、」到「三、」之間的列
+    const from = allRows.findIndex(r => /^二、/.test(r.txt));
+    if (from < 0) return null;
+    const rest = allRows.slice(from + 1);
+    const to = rest.findIndex(r => /^三、/.test(r.txt));
+    const region = to < 0 ? rest : rest.slice(0, to);
+    if (!region.length) return null;
+
+    const header = region.find(l => YEAR_HEADER.test(l.txt));
+    const kindRow = region.find(l => KIND_HEADER.test(l.txt));
+    const itemUnitRow = region.find(l => ITEM_UNIT_HEADER.test(l.txt));
+    if (!header || !kindRow) return null;
+
+    const kinds = clusterByGap(kindRow.cells, kindRow.txt.match(/決算數|預算數/g).length);
+    const years = clusterByGap(header.cells, header.txt.match(/\d{2,3}年度/g).length);
+    if (!kinds || !years || kinds.length !== years.length || kinds.length < 2) return null;
+
+    const anchors = kinds.map(k => k.x);
+    const spacing = anchors[1] - anchors[0];
+    const labels = kinds.map((k, i) => strip(years[i].parts.join('')) + strip(k.parts.join('')));
+    const unitCell = itemUnitRow && itemUnitRow.cells.find(c => strip(c.s).startsWith('單'));
+    const unitAnchor = unitCell ? unitCell.x
+        : itemUnitRow ? Math.max(...itemUnitRow.cells.map(c => c.x))
+        : anchors[0] - 40;
+
+    const body = region.filter(l => l !== header && l !== kindRow && l !== itemUnitRow);
+    const limit = rowGapLimit(body.slice(1).map((l, i) => body[i].y - l.y));
+
+    const groups = [];
+    let group = null, lastY = null;
+    body.forEach(l => {
+        if (!group || lastY - l.y > limit) { group = [l]; groups.push(group); }
+        else group.push(l);
+        lastY = l.y;
+    });
+
+    const issues = [];
+    const rendered = [['項目', '單位', ...labels].join('｜')];
+    groups.forEach(g => {
+        const buckets = { item: [], unit: [] };
+        anchors.forEach((_, i) => { buckets[i] = []; });
+        g.forEach(l => l.cells.forEach(c =>
+            buckets[columnOf(c.x + c.w / 2, anchors, spacing, unitAnchor)].push(c)));
+
+        const join = list => strip(list.sort((a, b) => (b.y - a.y) || (a.x - b.x)).map(c => c.s).join(''));
+        const item = join(buckets.item);
+        const unit = join(buckets.unit);
+        const values = anchors.map((_, i) => join(buckets[i]));
+        if (!item && values.every(v => !v)) return;
+        // 註解列橫跨整個表格寬度，整列合併而不分欄
+        if (/^註/.test(item)) {
+            rendered.push(strip(g.flatMap(l => l.cells).sort((a, b) => (b.y - a.y) || (a.x - b.x)).map(c => c.s).join('')));
+            return;
+        }
+
+        values.forEach((v, i) => { if (v && !VALUE_PATTERN.test(v)) issues.push(`${item}／${labels[i]}＝${v}`); });
+        rendered.push([item, unit, ...values].join('｜'));
+    });
+
+    if (rendered.length < 2) return null;
+    return { text: rendered.join('\n'), issues, rows: rendered.length - 1 };
 }
 
 export function looksLikeSourceFileName(name) {
