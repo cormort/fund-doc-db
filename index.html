@@ -1,0 +1,1229 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>基金文件結構化資料庫 (V39 - 說明與資料庫工作流程版)</title>
+    <style>
+        /* --- 核心佈局與主題 --- */
+        :root {
+            --primary-color: #007bff;
+            --secondary-color: #6c757d;
+            --success-color: #28a745;
+            --light-gray: #f8f9fa;
+            --medium-gray: #e9ecef;
+            --dark-gray: #6c757d;
+            --text-color: #212529;
+            --border-color: #dee2e6;
+            --shadow: 0 4px 8px rgba(0,0,0,0.05);
+            --border-radius: 8px;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            line-height: 1.6;
+            color: var(--text-color);
+            max-width: 1800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: var(--light-gray);
+        }
+        h1, h2, h3 { color: var(--text-color); }
+        h1 { text-align: center; color: var(--primary-color); margin-bottom: 30px;}
+        h2 { border-bottom: 2px solid var(--medium-gray); padding-bottom: 10px; margin-top: 0; }
+        
+        .main-container {
+            display: grid;
+            grid-template-columns: 1fr 4fr;
+            gap: 25px;
+        }
+
+        .panel {
+            background: #fff;
+            padding: 25px;
+            border-radius: var(--border-radius);
+            box-shadow: var(--shadow);
+        }
+
+        /* --- 左側面板: 檔案操作 --- */
+        #drop-zone {
+            border: 2px dashed var(--border-color);
+            border-radius: var(--border-radius);
+            padding: 40px;
+            text-align: center;
+            cursor: pointer;
+            transition: background-color 0.2s, border-color 0.2s;
+        }
+        #drop-zone.dragover { background-color: #e9f5ff; border-color: var(--primary-color); }
+        #drop-zone p { margin: 0; color: var(--dark-gray); font-size: 1.1em; }
+        #file-input, #json-input { display: none; }
+        #loader { text-align: center; display: none; margin-top: 20px; color: var(--dark-gray); }
+        #file-list p { margin: 5px 0; background-color: var(--light-gray); padding: 5px 10px; border-radius: 4px; font-size: 0.9em;}
+        .io-buttons { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 15px; }
+        .btn {
+            flex: 1 1 100%; padding: 10px 15px; border-radius: 5px; border: 1px solid var(--border-color);
+            cursor: pointer; font-weight: 600; text-align: center; transition: background-color 0.2s;
+        }
+        .btn-primary { background-color: var(--primary-color); color: white; border-color: var(--primary-color); }
+        .btn-primary:hover { background-color: #0056b3; }
+        .btn-secondary { background-color: var(--secondary-color); color: white; border-color: var(--secondary-color); }
+        .btn-secondary:hover { background-color: #5a6268; }
+        .btn-success { background-color: var(--success-color); color: white; border-color: var(--success-color); }
+        .btn-success:hover { background-color: #218838; }
+
+        /* --- 右側面板: 控制項與結果 --- */
+        #global-controls-panel {
+            display: none;
+            flex-wrap: wrap;
+            gap: 20px;
+            align-items: flex-end;
+            margin-bottom: 25px;
+            padding: 20px;
+            background-color: var(--light-gray);
+            border-radius: var(--border-radius);
+        }
+        .control-group { flex: 1 1 150px; }
+        .control-group.preview { flex: 2 1 300px; }
+        label { font-weight: bold; font-size: 0.9em; margin-bottom: 5px; display: block; }
+        select, input[type="text"] {
+            width: 100%; padding: 10px; border: 1px solid var(--border-color);
+            border-radius: 4px; box-sizing: border-box; font-size: 1em;
+        }
+        select:focus, input[type="text"]:focus {
+            outline: none; border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.25);
+        }
+        .keyword-search-group {
+            display: flex;
+            gap: 10px;
+        }
+        .keyword-search-group input { flex-grow: 1; }
+        .keyword-search-group button { flex-shrink: 0; }
+        
+        #filter-controls { display: flex; flex-direction: column; gap: 15px; margin-bottom: 20px; }
+        .filter-row { display: flex; gap: 15px; }
+        .filter-group { flex: 1; }
+        .filter-group-full { flex: 1; }
+        .tabs { display: flex; border-bottom: 2px solid var(--border-color); margin-bottom: 20px; }
+        .tab-button {
+            padding: 12px 25px; cursor: pointer; background: none; border: none; font-size: 1.1em;
+            border-bottom: 3px solid transparent; margin-bottom: -2px; transition: color 0.2s, border-bottom-color 0.2s;
+        }
+        .tab-button.active { color: var(--primary-color); border-bottom-color: var(--primary-color); font-weight: 600; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; animation: fadeIn 0.5s; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        #fund-content-display {
+            white-space: pre-wrap; background-color: var(--light-gray); padding: 15px; border-radius: 4px;
+            max-height: 70vh; overflow-y: auto; font-family: "SF Mono", "Fira Code", "Courier New", Courier, monospace;
+            border: 1px solid var(--border-color);
+        }
+        #search-results-table { 
+            width: 100%; border-collapse: collapse; margin-top: 15px; 
+            table-layout: fixed;
+        }
+        #search-results-table th, #search-results-table td {
+            border: 1px solid var(--border-color); padding: 12px;
+            vertical-align: top; word-wrap: break-word;
+            text-align: center;
+        }
+        #search-results-table th { 
+            background-color: var(--medium-gray); font-weight: 600; 
+            position: relative;
+        }
+        .resize-handle {
+            position: absolute;
+            top: 0;
+            right: 0;
+            bottom: 0;
+            width: 5px;
+            cursor: col-resize;
+            user-select: none;
+        }
+        #search-results-table tr:nth-child(even) { background-color: var(--light-gray); }
+        .highlight { background-color: yellow; color: red; font-weight: bold; }
+        td pre { white-space: pre-wrap; font-family: inherit; margin: 0; font-size: 1em; text-align: left;}
+
+        /* --- V38 UI/UX enhancements --- */
+        :root { --primary-color:#1d4ed8; --primary-soft:#eff6ff; --success-color:#047857; --danger-color:#b91c1c; --shadow:0 8px 24px rgba(15,23,42,.08); --border-radius:14px; }
+        * { box-sizing:border-box; }
+        body { background:linear-gradient(180deg,#f8fafc 0,#eef2f7 100%); color:#172033; padding:24px; }
+        h1 { text-align:left; max-width:1800px; margin:0 auto 22px; font-size:clamp(1.6rem,2.4vw,2.35rem); letter-spacing:-.02em; }
+        .main-container { grid-template-columns:minmax(280px,340px) minmax(0,1fr); align-items:start; }
+        .panel { border:1px solid rgba(148,163,184,.28); }
+        .main-container > .panel:first-child { position:sticky; top:18px; }
+        #drop-zone { padding:34px 18px; background:#f8fbff; border-color:#93b4ea; }
+        #drop-zone:hover, #drop-zone:focus-visible { background:var(--primary-soft); border-color:var(--primary-color); transform:translateY(-1px); }
+        .drop-icon { width:46px; height:46px; margin:0 auto 10px; display:grid; place-items:center; border-radius:50%; background:#dbeafe; color:#1d4ed8; font-size:1.5rem; font-weight:800; }
+        .drop-hint { margin-top:7px!important; font-size:.88rem!important; }
+        .btn { min-height:42px; border-radius:9px; transition:transform .15s,box-shadow .15s,background .15s; }
+        .btn:hover { transform:translateY(-1px); box-shadow:0 5px 12px rgba(15,23,42,.12); }
+        .btn:focus-visible, select:focus-visible, input:focus-visible { outline:3px solid rgba(37,99,235,.22); outline-offset:2px; }
+        .btn-ghost { background:#fff; color:#334155; border-color:#cbd5e1; }
+        .btn-ghost:hover { background:#f8fafc; }
+        .btn.compact { flex:none; min-height:36px; padding:7px 12px; }
+        .data-summary { margin-top:14px; padding:12px; border:1px solid #dbe3ef; background:#f8fafc; border-radius:10px; color:#475569; font-size:.9rem; }
+        .data-summary strong { color:#0f172a; }
+        #file-list { max-height:30vh; overflow:auto; }
+        #file-list p { display:flex; align-items:center; gap:6px; padding:8px 10px; border:1px solid #e2e8f0; }
+        .spinner { width:26px; height:26px; margin:0 auto; border:3px solid #dbeafe; border-top-color:#2563eb; border-radius:50%; animation:spin .7s linear infinite; }
+        @keyframes spin { to { transform:rotate(360deg); } }
+        .section-head { display:flex; justify-content:space-between; align-items:flex-end; gap:16px; margin-bottom:18px; }
+        .section-head h3 { margin:0; }
+        .section-subtitle { margin:3px 0 0; color:#64748b; font-size:.9rem; }
+        .tabs { gap:8px; }
+        .tab-button { border-radius:9px 9px 0 0; }
+        .tab-button:hover { background:#f1f5f9; }
+        #global-controls-panel { border:1px solid #dbe3ef; background:#f8fafc; }
+        select, input[type="text"] { min-height:42px; background:white; }
+        #search-results-table { border-collapse:separate; border-spacing:0; }
+        #search-results-table th { position:sticky; top:0; z-index:2; background:#e9eef6; }
+        #search-results-table tbody tr:hover { background:#eef6ff; }
+        #fund-content-display { line-height:1.75; }
+        .toast { position:fixed; right:24px; bottom:24px; z-index:1000; max-width:440px; padding:14px 18px; border-radius:11px; color:#fff; background:#0f172a; box-shadow:0 12px 35px rgba(15,23,42,.28); opacity:0; transform:translateY(12px); pointer-events:none; transition:.22s; }
+        .toast.show { opacity:1; transform:none; }
+        .toast.error { background:#991b1b; }
+        @media (max-width:980px) { body{padding:12px}.main-container{grid-template-columns:1fr}.main-container>.panel:first-child{position:static}.filter-row{flex-direction:column}.section-head{align-items:flex-start}.main-container>.panel{padding:18px} }
+
+        .main-container { transition:grid-template-columns .25s ease; }
+        .sidebar-heading { display:flex;align-items:center;justify-content:space-between;gap:12px; }
+        .sidebar-heading h2 { flex:1;margin-bottom:18px; }
+        .sidebar-collapse-btn { display:inline-flex;align-items:center;justify-content:center;gap:6px;min-width:76px;min-height:36px;padding:7px 10px;border:1px solid #cbd5e1;border-radius:9px;background:#fff;color:#334155;cursor:pointer;font-weight:700; }
+        .sidebar-collapse-btn:hover { color:var(--primary-color);border-color:#93b4ea;background:#eff6ff; }
+        .collapse-icon { font-size:1.45rem;line-height:1;transition:transform .25s ease; }
+        .main-container.sidebar-collapsed { grid-template-columns:78px minmax(0,1fr); }
+        .main-container.sidebar-collapsed .sidebar-panel { padding:14px 10px; }
+        .main-container.sidebar-collapsed .sidebar-heading { min-height:180px;flex-direction:column;justify-content:flex-start; }
+        .main-container.sidebar-collapsed .sidebar-heading h2,.main-container.sidebar-collapsed .sidebar-content { display:none; }
+        .main-container.sidebar-collapsed .sidebar-collapse-btn { min-width:48px;width:48px;padding:8px 5px;flex-direction:column; }
+        .main-container.sidebar-collapsed .collapse-icon { transform:rotate(180deg); }
+        .main-container.sidebar-collapsed .collapse-label { writing-mode:vertical-rl;letter-spacing:.12em; }
+        @media(max-width:980px){.main-container.sidebar-collapsed{grid-template-columns:1fr}.main-container.sidebar-collapsed .sidebar-panel{padding:12px 18px}.main-container.sidebar-collapsed .sidebar-heading{min-height:auto;flex-direction:row;justify-content:space-between}.main-container.sidebar-collapsed .sidebar-heading h2{display:block;margin:0}.main-container.sidebar-collapsed .sidebar-collapse-btn{width:auto;min-width:88px;flex-direction:row}.main-container.sidebar-collapsed .collapse-label{writing-mode:horizontal-tb;letter-spacing:normal}}
+
+        /* --- V38.4 conditional batch settings --- */
+        #global-controls-panel.batch-settings-card { display:none; position:relative; border:1px solid #bfdbfe; background:linear-gradient(135deg,#eff6ff 0%,#f8fafc 100%); }
+        .batch-settings-header { flex:1 1 100%; display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
+        .batch-settings-header h3 { margin:0 0 3px; color:#1e3a8a; }
+        .batch-settings-header p { margin:0; color:#64748b; font-size:.9rem; }
+        .batch-badge { flex:none; padding:5px 9px; border-radius:999px; background:#dbeafe; color:#1d4ed8; font-size:.78rem; font-weight:700; }
+        .batch-settings-note { flex:1 1 100%; margin:0; padding-top:10px; border-top:1px solid #dbeafe; color:#64748b; font-size:.84rem; }
+        .preview-toolbar { display:flex; align-items:flex-end; justify-content:space-between; gap:20px; margin-bottom:14px; }
+        .preview-toolbar h3 { margin:0; }
+        .preview-toolbar p { margin:3px 0 0; color:#64748b; font-size:.88rem; }
+        .preview-selector-wrap { min-width:min(480px,48%); }
+        @media(max-width:760px){.batch-settings-header,.preview-toolbar{flex-direction:column;align-items:stretch}.preview-selector-wrap{min-width:100%}}
+
+        /* --- V38.5 compact filters and wider keyword search --- */
+        #filter-controls { gap:10px; margin-bottom:16px; }
+        .filter-row { gap:12px; align-items:flex-end; }
+        .filter-group label, .filter-group-full label { margin-bottom:4px; }
+        #filter-controls select, #filter-controls input[type="text"] { min-height:38px; height:38px; padding:7px 11px; font-size:.96rem; }
+        .keyword-filter-row .subsub-filter-group { flex:0 1 32%; min-width:230px; }
+        .keyword-filter-row .filter-group-full { flex:1 1 68%; min-width:360px; }
+        .keyword-search-group { display:grid; grid-template-columns:minmax(260px,1fr) auto; gap:8px; }
+        .keyword-search-group input { width:100%; min-width:0; }
+        .keyword-search-group .btn { flex:none; width:auto; min-width:76px; min-height:38px; height:38px; padding:7px 18px; white-space:nowrap; }
+        @media(max-width:980px){
+            .keyword-filter-row .subsub-filter-group,.keyword-filter-row .filter-group-full{min-width:0;width:100%;flex:1 1 100%}
+            .keyword-search-group{grid-template-columns:minmax(0,1fr) auto}
+        }
+        @media(max-width:560px){
+            .keyword-search-group{grid-template-columns:1fr}
+            .keyword-search-group .btn{width:100%}
+        }
+
+        /* --- V39 product positioning and help tab --- */
+        .app-header { max-width:1800px; margin:0 auto 22px; }
+        .app-header h1 { margin:0; }
+        .app-header p { margin:5px 0 0; color:#64748b; font-size:1rem; }
+        .help-hero { padding:24px; border:1px solid #bfdbfe; border-radius:14px; background:linear-gradient(135deg,#eff6ff 0%,#f8fafc 100%); }
+        .help-kicker { display:inline-block; margin-bottom:6px; color:#1d4ed8; font-size:.8rem; font-weight:800; letter-spacing:.08em; }
+        .help-hero h3 { margin:0 0 8px; color:#1e3a8a; font-size:1.35rem; }
+        .help-hero p { max-width:920px; margin:0; color:#475569; }
+        .help-flow { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-top:20px; }
+        .help-flow span { padding:8px 12px; border:1px solid #bfdbfe; border-radius:999px; background:#fff; color:#1e3a8a; font-weight:700; }
+        .help-flow b { color:#3b82f6; }
+        .help-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:16px; margin-top:18px; }
+        .help-card { position:relative; padding:22px; border:1px solid #e2e8f0; border-radius:14px; background:#fff; box-shadow:0 5px 16px rgba(15,23,42,.05); }
+        .help-card h4 { margin:0 0 8px; color:#0f172a; font-size:1.05rem; }
+        .help-card p { margin:0 0 10px; color:#475569; }
+        .help-card ul { margin:0; padding-left:20px; color:#475569; }
+        .help-card li + li { margin-top:5px; }
+        .help-step { position:absolute; top:16px; right:16px; width:30px; height:30px; display:grid; place-items:center; border-radius:50%; background:#dbeafe; color:#1d4ed8; font-weight:800; }
+        .help-definition { margin-top:18px; padding:22px; border:1px solid #e2e8f0; border-radius:14px; background:#f8fafc; }
+        .help-definition h4 { margin:0 0 12px; }
+        .help-definition dl { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px 20px; margin:0; }
+        .help-definition dl div { padding:12px; border-radius:10px; background:#fff; }
+        .help-definition dt { color:#1e3a8a; font-weight:800; }
+        .help-definition dd { margin:3px 0 0; color:#475569; }
+        .help-notice { margin-top:18px; padding:14px 16px; border-left:4px solid #d97706; border-radius:8px; background:#fffbeb; color:#78350f; }
+        @media(max-width:980px){.help-grid{grid-template-columns:1fr}.help-definition dl{grid-template-columns:1fr}}
+    </style>
+</head>
+<body>
+
+    <header class="app-header">
+        <h1>基金文件結構化資料庫</h1>
+        <p>將散落的 Word／PDF 轉為結構化 JSON，集中保存、整併及跨文件查詢</p>
+    </header>
+
+    <div class="main-container" id="main-container">
+        <!-- Left Panel for File Operations -->
+        <div class="panel sidebar-panel" id="sidebar-panel">
+            <div class="sidebar-heading"><h2>資料庫建置與管理</h2><button type="button" id="sidebar-collapse-btn" class="sidebar-collapse-btn" aria-expanded="true" aria-controls="sidebar-content" title="收合左側選單"><span class="collapse-icon" aria-hidden="true">‹</span><span class="collapse-label">收合</span></button></div>
+            <div id="sidebar-content" class="sidebar-content">
+            <input type="file" id="file-input" multiple accept=".pdf,.docx,.doc">
+            <input type="file" id="json-input" multiple accept=".json,application/json">
+
+            <div id="drop-zone">
+                <div class="drop-icon">⇧</div><p><strong>建立或載入資料庫</strong></p><p class="drop-hint">拖曳多個 Word／PDF 建立資料，或載入 JSON 資料庫</p>
+                 <small style="color: var(--dark-gray);">.doc 格式不支援，請先另存為 .docx</small>
+            </div>
+            <div class="io-buttons">
+                <button class="btn btn-secondary" id="import-json-btn" style="flex-basis: 48%;">載入 JSON 資料庫</button>
+                <button class="btn btn-primary" id="export-json-btn" style="flex-basis: 48%;">儲存 JSON 資料庫</button>
+                <button class="btn btn-success" id="export-excel-btn" style="flex-basis: 100%;">匯出查詢結果 Excel</button><button class="btn btn-ghost" id="clear-data-btn" style="flex-basis: 100%;">清空目前資料庫</button>
+            </div>
+            <div id="loader"><div class="spinner"></div><p>處理中，請稍候...</p></div><div id="data-summary" class="data-summary" aria-live="polite"><span>目前資料庫尚無資料</span></div>
+            <div id="file-list" style="margin-top:10px;"></div>
+            </div>
+        </div>
+
+        <!-- Right Panel for Controls and Results -->
+        <div class="panel">
+            <!-- Global Controls Panel at the top -->
+            <div id="global-controls-panel" class="batch-settings-card" aria-live="polite">
+                <div class="batch-settings-header">
+                    <div>
+                        <h3>待處理檔案設定</h3>
+                        <p id="pending-files-summary">請先上傳 PDF 或 DOCX 檔案。</p>
+                    </div>
+                    <span class="batch-badge">僅套用至本批檔案</span>
+                </div>
+                 <div class="control-group">
+                    <label for="year-selector">本批檔案預算年度</label>
+                    <select id="year-selector"></select>
+                </div>
+                <div class="control-group">
+                    <label for="fund-type-selector">本批檔案基金屬性</label>
+                    <select id="fund-type-selector">
+                        <option value="作業基金">作業基金</option>
+                        <option value="政事基金">政事基金</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                     <button class="btn btn-primary" id="confirm-setup-btn" style="width:100%;">開始解析檔案</button>
+                </div>
+                <p class="batch-settings-note">此區只用於新上傳的 PDF／DOCX。匯入 JSON 時，系統直接採用 JSON 內既有的年度與基金屬性。</p>
+            </div>
+
+            <!-- Tabs for Preview and Search -->
+            <div class="tabs">
+                <button class="tab-button active" onclick="openTab(event, 'view-tab')">內容預覽</button>
+                <button class="tab-button" onclick="openTab(event, 'search-tab')">資料庫查詢</button>
+                <button class="tab-button" onclick="openTab(event, 'help-tab')">使用說明</button>
+            </div>
+
+            <div id="view-tab" class="tab-content active">
+                <div class="preview-toolbar">
+                    <div><h3>基金內容預覽</h3><p>選擇已載入的基金以檢視結構化內容</p></div>
+                    <div class="preview-selector-wrap"><label for="fund-selector">預覽基金</label><select id="fund-selector"></select></div>
+                </div>
+                <pre id="fund-content-display">請先從左側載入並選擇一個基金。</pre>
+            </div>
+
+            <div id="search-tab" class="tab-content">
+                <div class="section-head"><div><h3>資料庫查詢</h3><p class="section-subtitle">依年度、基金、標題階層及關鍵字查詢已載入的結構化資料</p></div><button id="reset-filters-btn" class="btn btn-ghost compact">重設篩選</button></div>
+                <div id="filter-controls">
+                     <div class="filter-row">
+                        <div class="filter-group">
+                            <label for="year-filter">查詢年度</label>
+                            <select id="year-filter"></select>
+                        </div>
+                        <div class="filter-group">
+                            <label for="fund-filter">基金名稱</label>
+                            <select id="fund-filter"></select>
+                        </div>
+                    </div>
+                    <div class="filter-row">
+                        <div class="filter-group">
+                            <label for="main-title-filter">大標題</label>
+                            <select id="main-title-filter"></select>
+                        </div>
+                         <div class="filter-group">
+                            <label for="sub-title-filter">中標題</label>
+                            <select id="sub-title-filter"></select>
+                        </div>
+                    </div>
+                     <div class="filter-row keyword-filter-row">
+                        <div class="filter-group subsub-filter-group">
+                            <label for="sub-sub-title-filter">小標題</label>
+                            <select id="sub-sub-title-filter"></select>
+                        </div>
+                        <div class="filter-group-full">
+                            <label for="search-keyword">關鍵字</label>
+                            <div class="keyword-search-group">
+                                <input type="text" id="search-keyword" placeholder="輸入關鍵字後按 Enter 或點擊按鈕">
+                                <button id="search-btn" class="btn btn-primary">查詢</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div style="overflow-x: auto;">
+                    <table id="search-results-table">
+                        <thead>
+                            <tr>
+                                <th style="width: 8%;">年度</th>
+                                <th style="width: 10%;">屬性</th>
+                                <th style="width: 15%;">基金名稱</th>
+                                <th style="width: 12%;">大標題</th>
+                                <th style="width: 12%;">中標題</th>
+                                <th style="width: 12%;">小標題</th>
+                                <th style="width: 31%;">分析說明內容</th>
+                            </tr>
+                        </thead>
+                        <tbody id="search-results-body">
+                            <tr>
+                                <td colspan="7" style="text-align:center;">請先載入檔案，然後使用上方選單進行篩選。</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div id="help-tab" class="tab-content">
+                <div class="help-hero">
+                    <div>
+                        <span class="help-kicker">工具定位</span>
+                        <h3>把散落文件轉成可保存、可整併、可查詢的結構化資料</h3>
+                        <p>本工具不是只做一次性的段落擷取，而是將 Word／PDF 中的基金內容轉為標準 JSON，形成可重複載入與持續累積的輕量化文件資料庫。</p>
+                    </div>
+                    <div class="help-flow" aria-label="資料處理流程">
+                        <span>Word／PDF</span><b>→</b><span>解析結構</span><b>→</b><span>JSON 資料庫</span><b>→</b><span>跨文件查詢</span>
+                    </div>
+                </div>
+
+                <div class="help-grid">
+                    <section class="help-card">
+                        <div class="help-step">1</div>
+                        <h4>建立資料</h4>
+                        <p>上傳一個或多個 Word／PDF，設定本批檔案的預算年度與基金屬性，再開始解析。</p>
+                        <ul>
+                            <li>辨識大標題、中標題及小標題</li>
+                            <li>將段落內容轉成一致的 JSON 結構</li>
+                            <li>解析完成後加入目前資料庫</li>
+                        </ul>
+                    </section>
+                    <section class="help-card">
+                        <div class="help-step">2</div>
+                        <h4>管理資料庫</h4>
+                        <p>載入既有 JSON 資料庫，與目前資料合併，並排除相同年度、屬性、基金及來源檔案的重複資料。</p>
+                        <ul>
+                            <li>「載入 JSON 資料庫」用於接續既有資料</li>
+                            <li>「儲存 JSON 資料庫」用於備份目前完整資料</li>
+                            <li>關閉網頁前，請先儲存 JSON 資料庫</li>
+                        </ul>
+                    </section>
+                    <section class="help-card">
+                        <div class="help-step">3</div>
+                        <h4>查詢與輸出</h4>
+                        <p>可依年度、基金名稱及標題階層逐層縮小範圍，也可使用關鍵字搜尋內容。</p>
+                        <ul>
+                            <li>查詢條件只篩選資料，不會修改資料</li>
+                            <li>關鍵字會在結果中醒目標示</li>
+                            <li>目前查詢結果可另行匯出為 Excel</li>
+                        </ul>
+                    </section>
+                </div>
+
+                <div class="help-definition">
+                    <h4>資料角色說明</h4>
+                    <dl>
+                        <div><dt>Word／PDF</dt><dd>原始文件來源，用來建立新的結構化資料。</dd></div>
+                        <div><dt>JSON</dt><dd>資料庫的保存及交換格式，可跨批次載入、合併與備份。</dd></div>
+                        <div><dt>目前資料庫</dt><dd>本次網頁已載入及建立的資料集合。資料主要存在瀏覽器記憶體中。</dd></div>
+                        <div><dt>Excel</dt><dd>目前查詢結果的輸出格式，不是完整資料庫備份。</dd></div>
+                    </dl>
+                </div>
+
+                <div class="help-notice">
+                    <strong>重要提醒：</strong>此版本是純瀏覽器工具，資料不會自動寫入伺服器。完成資料建置或整併後，請使用「儲存 JSON 資料庫」下載備份。
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Libraries from CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.5.1/mammoth.browser.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+    <script>
+        if (window.pdfjsLib) {
+            pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.worker.min.js`;
+        }
+
+        window.fundsData = [];
+        window.pendingFiles = [];
+        window.isDatabaseDirty = false;
+
+        function markDirty(dirty = true) {
+            window.isDatabaseDirty = dirty;
+            const badge = document.getElementById('dirty-badge');
+            if (badge) badge.style.display = dirty ? 'inline' : 'none';
+        }
+        window.addEventListener('beforeunload', e => {
+            if (!window.isDatabaseDirty) return;
+            e.preventDefault();
+            e.returnValue = '';
+        });
+
+        function checkDependencies() {
+            const missing = [];
+            if (!window.pdfjsLib) missing.push('PDF.js');
+            if (!window.mammoth) missing.push('Mammoth');
+            if (!window.XLSX) missing.push('SheetJS');
+            if (!missing.length) return;
+            const bar = document.createElement('div');
+            bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;padding:10px;background:#c0392b;color:#fff;text-align:center;font-size:14px;';
+            bar.textContent = `缺少必要元件：${missing.join('、')}。請確認網路連線（本工具的解析／匯出功能需要載入 CDN 套件）。`;
+            document.body.prepend(bar);
+        }
+
+        // DOM Elements
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const jsonInput = document.getElementById('json-input');
+        const importJsonBtn = document.getElementById('import-json-btn');
+        const exportJsonBtn = document.getElementById('export-json-btn');
+        const exportExcelBtn = document.getElementById('export-excel-btn');
+        const globalControlsPanel = document.getElementById('global-controls-panel');
+        const yearSelector = document.getElementById('year-selector');
+        const fundTypeSelector = document.getElementById('fund-type-selector');
+        const confirmSetupBtn = document.getElementById('confirm-setup-btn');
+        const fileList = document.getElementById('file-list');
+        const loader = document.getElementById('loader');
+        const fundSelector = document.getElementById('fund-selector'); 
+        const fundContentDisplay = document.getElementById('fund-content-display');
+        const searchKeywordInput = document.getElementById('search-keyword');
+        const searchBtn = document.getElementById('search-btn');
+        const searchResultsBody = document.getElementById('search-results-body');
+        const yearFilter = document.getElementById('year-filter');
+        const fundFilter = document.getElementById('fund-filter');
+        const mainTitleFilter = document.getElementById('main-title-filter');
+        const subTitleFilter = document.getElementById('sub-title-filter');
+        const subSubTitleFilter = document.getElementById('sub-sub-title-filter');
+
+        const REGEX_SETS = {
+            '作業基金': {
+                main: /^(一、基金概況|二、(主要營運|最近\s*5\s*年主要營運項目)|三、本年度營運計畫及預算)/,
+                sub: /^[\(（](一|二|三)[\)）](營運計畫主要內容|預算內容|補辦預算)/,
+                subSub: /^(1\.業務收支之預計|2\.餘絀撥補之預計|3\.現金流量之預計)/,
+                sectionTwoIdentifier: /二、.*(主要營運|最近\s*5\s*年主要營運項目)/
+            },
+            '政事基金': {
+                main: /^(一、基金概況|二、(主要業務項目|最近\s*5\s*年主要業務項目|本年度業務計畫及預算)|三、本年度業務計畫及預算)/,
+                sub: /^[\(（](一|二)[\)）](主要業務計畫|預算內容)/,
+                subSub: /^(1\.基金來源、用途及餘絀之預計|2\.現金流量之預計)/,
+                sectionTwoIdentifier: /二、.*(主要業務項目|最近\s*5\s*年主要業務項目|本年度業務計畫及預算)/
+            }
+        };
+
+        function openTab(evt, tabName) {
+            let i, tabcontent, tablinks;
+            tabcontent = document.getElementsByClassName("tab-content");
+            for (i = 0; i < tabcontent.length; i++) tabcontent[i].style.display = "none";
+            tablinks = document.getElementsByClassName("tab-button");
+            for (i = 0; i < tablinks.length; i++) tablinks[i].className = tablinks[i].className.replace(" active", "");
+            document.getElementById(tabName).style.display = "block";
+            evt.currentTarget.className += " active";
+        }
+
+        function setupDragAndDrop() {
+            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                dropZone.addEventListener(eventName, preventDefaults, false);
+                document.body.addEventListener(eventName, preventDefaults, false);
+            });
+            ['dragenter', 'dragover'].forEach(eventName => dropZone.addEventListener(eventName, () => dropZone.classList.add('dragover'), false));
+            ['dragleave', 'drop'].forEach(eventName => dropZone.addEventListener(eventName, () => dropZone.classList.remove('dragover'), false));
+            dropZone.addEventListener('drop', (e) => {
+                const dt = e.dataTransfer;
+                if (dt.files && dt.files.length > 0) routeIncomingFiles(dt.files);
+            }, false);
+        }
+
+        function preventDefaults(e) { e.preventDefault(); e.stopPropagation(); }
+        dropZone.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files && e.target.files.length > 0) handleFiles(e.target.files);
+        });
+
+        function handleFiles(files) {
+            window.pendingFiles = Array.from(files).filter(file => ['pdf', 'docx', 'doc'].includes(file.name.split('.').pop().toLowerCase()));
+            fileList.innerHTML = '';
+            window.pendingFiles.forEach(file => {
+                const fileType = file.name.split('.').pop().toLowerCase();
+                if (fileType === 'doc') {
+                     fileList.innerHTML += `<p style="color:orange;">待處理 (請先轉為.docx): ${file.name}</p>`;
+                } else {
+                     fileList.innerHTML += `<p>待處理: ${file.name}</p>`;
+                }
+            });
+
+            if (window.pendingFiles.length > 0) {
+                globalControlsPanel.style.display = 'flex';
+                document.getElementById('pending-files-summary').textContent = `本批次共 ${window.pendingFiles.length} 個 PDF／DOCX 待設定與解析。`;
+                yearSelector.innerHTML = '<option value="">請先載入資料</option>';
+                yearSelector.disabled = true;
+                searchResultsBody.innerHTML = `<tr><td colspan="7" style="text-align:center;">請為新載入的 ${window.pendingFiles.length} 個基金應用年度和屬性。</td></tr>`;
+            }
+        }
+        
+        confirmSetupBtn.addEventListener('click', async () => {
+            if (window.pendingFiles.length === 0) {
+                alert("沒有待處理的檔案。請先拖曳檔案。");
+                return;
+            }
+
+            let selectedYear = yearSelector.value;
+            const selectedType = fundTypeSelector.value;
+            if (!selectedYear) {
+                selectedYear = prompt('目前尚無可選年度，請輸入本批檔案的民國預算年度（例如 115）：', '')?.trim() || '';
+                if (!/^\d{2,3}$/.test(selectedYear)) {
+                    alert('請輸入正確的民國年度。');
+                    return;
+                }
+                selectedYear = String(Number(selectedYear)).padStart(3, '0');
+            }
+            
+            loader.style.display = 'block';
+            fileList.innerHTML = '';
+
+            let newFunds = [];
+            const filePromises = window.pendingFiles.map(async (file) => {
+                const fileType = file.name.split('.').pop().toLowerCase();
+                fileList.innerHTML += `<p>處理中 (${fileType}): ${file.name}</p>`;
+
+                if (fileType === 'pdf') {
+                    await parsePdf(file, newFunds, selectedType, selectedYear);
+                } else if (fileType === 'docx') {
+                    await parseDocx(file, newFunds, selectedType, selectedYear);
+                } else if (fileType === 'doc') {
+                    fileList.innerHTML += `<p style="color:red;">無法處理: ${file.name} (.doc 格式不支援，請先另存為 .docx)</p>`;
+                } else {
+                     fileList.innerHTML += `<p style="color:orange;">跳過不支援的檔案: ${file.name}</p>`;
+                }
+            });
+
+            await Promise.all(filePromises);
+            
+            window.fundsData.push(...newFunds.map(normalizeFundName));
+            window.pendingFiles = [];
+            if (newFunds.length) markDirty();
+
+            loader.style.display = 'none';
+            if(newFunds.length > 0) {
+                 initializeFilters();
+            }
+        });
+
+        async function parsePdf(file, targetArray, fundType, budgetYear) {
+            const reader = new FileReader();
+            return new Promise((resolve) => {
+                reader.onload = async (event) => {
+                    try {
+                        const pdfData = new Uint8Array(event.target.result);
+                        const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
+                        let fullText = '';
+                        for (let i = 1; i <= pdf.numPages; i++) {
+                            const page = await pdf.getPage(i);
+                            const textContent = await page.getTextContent();
+                            const items = textContent.items;
+                            if (items.length === 0) continue;
+                            items.sort((a, b) => {
+                                if (a.transform[5] > b.transform[5]) return -1;
+                                if (a.transform[5] < b.transform[5]) return 1;
+                                if (a.transform[4] < b.transform[4]) return -1;
+                                if (a.transform[4] > b.transform[4]) return 1;
+                                return 0;
+                            });
+                            let pageText = '';
+                            if (items.length > 0) {
+                                let lastY = items[0].transform[5];
+                                for (const item of items) {
+                                    if (Math.abs(item.transform[5] - lastY) > 5) pageText += '\n';
+                                    pageText += item.str;
+                                    lastY = item.transform[5];
+                                }
+                            }
+                            fullText += pageText + '\n\n';
+                        }
+                        extractData(fullText, file.name, targetArray, fundType, budgetYear);
+                        resolve();
+                    } catch (error) {
+                        console.error('解析 PDF 時發生錯誤:', file.name, error);
+                        fileList.innerHTML += `<p style="color:red;">讀取失敗: ${file.name}</p>`;
+                        resolve();
+                    }
+                };
+                reader.readAsArrayBuffer(file);
+            });
+        }
+        
+        async function parseDocx(file, targetArray, fundType, budgetYear) {
+            const reader = new FileReader();
+            return new Promise((resolve) => {
+                reader.onload = async (event) => {
+                    try {
+                        const arrayBuffer = event.target.result;
+                        const result = await mammoth.extractRawText({ arrayBuffer: arrayBuffer });
+                        extractData(result.value, file.name, targetArray, fundType, budgetYear);
+                        resolve();
+                    } catch (error) {
+                        console.error('解析 DOCX 時發生錯誤:', file.name, error);
+                        fileList.innerHTML += `<p style="color:red;">讀取失敗: ${file.name}</p>`;
+                        resolve();
+                    }
+                };
+                reader.readAsArrayBuffer(file);
+            });
+        }
+        
+        function extractData(text, fileName, targetArray, fundType, budgetYear) {
+            const regexSet = REGEX_SETS[fundType] || REGEX_SETS['作業基金'];
+            const { main: mainTitleRegex, sub: subTitleRegex, subSub: subSubTitleRegex, sectionTwoIdentifier } = regexSet;
+
+            const allLines = text.split('\n').map(line => line.trim()).filter(Boolean);
+            if (allLines.length === 0) return;
+
+            let fundName = fileName.replace(/\.(pdf|docx)$/i, '');
+            let startIndex = 0;
+            
+            for (let i = 0; i < Math.min(allLines.length, 5); i++) {
+                if (!mainTitleRegex.test(allLines[i].replace(/\s/g, ''))) {
+                    if (allLines[i].includes('基金')) {
+                        fundName = allLines[i].replace(/\s/g, '');
+                        startIndex = i + 1;
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+
+            const flatData = [];
+            let currentMain = '', currentSub = '', currentSubSub = '';
+            let contentBuffer = [];
+
+            function pushContent() {
+                if (!currentMain && !currentSub && !currentSubSub && contentBuffer.length === 0) return;
+                
+                let content = contentBuffer.join('').replace(/\s/g, ''); 
+                if (currentMain) {
+                    const isSectionTwo = sectionTwoIdentifier.test(currentMain);
+                    if (isSectionTwo && currentSub === '' && currentSubSub === '') {
+                        content = "[表格內容，已於程式中略過]";
+                    } else if (content) {
+                        content = content.replace(/。/g, '。\n');
+                    }
+                }
+                
+                if (currentMain || currentSub || currentSubSub || content) {
+                    flatData.push({ main: currentMain, sub: currentSub, subSub: currentSubSub, content: content });
+                }
+                contentBuffer = [];
+            }
+
+            for (let i = startIndex; i < allLines.length; i++) {
+                const line = allLines[i];
+                const normalizedLine = line.replace(/\s/g, '');
+
+                if (mainTitleRegex.test(normalizedLine)) {
+                    pushContent();
+                    currentMain = line;
+                    currentSub = ''; currentSubSub = '';
+                } else if (subTitleRegex.test(normalizedLine)) {
+                    pushContent();
+                    currentSub = line;
+                    currentSubSub = '';
+                } else if (subSubTitleRegex.test(normalizedLine)) {
+                    pushContent();
+                    currentSubSub = line;
+                } else {
+                    contentBuffer.push(line);
+                }
+            }
+            pushContent();
+
+            targetArray.push({
+                fundName, budgetYear, fundType,
+                structured: flatData.filter(item => item.main || item.sub || item.subSub || item.content),
+                sourceFile: fileName,
+                isDataSet: true
+            });
+        }
+        
+        // --- DATA MANAGEMENT AND UI LOGIC ---
+
+        importJsonBtn.addEventListener('click', () => jsonInput.click());
+        jsonInput.addEventListener('change', async (event) => {
+            await importJsonFiles(event.target.files);
+            jsonInput.value = '';
+        });
+
+        function looksLikeSourceFileName(name) {
+            const value = String(name || '').trim();
+            return /^(?:of|sf)?\d{2,3}[a-z]{0,3}[-_]/i.test(value) || /\.(?:pdf|docx?|json)$/i.test(value);
+        }
+
+        function normalizeFundName(fund) {
+            const originalName = String(fund.fundName || '').trim();
+            if (!looksLikeSourceFileName(originalName)) return fund;
+
+            // 部分舊資料解析時，真正基金名稱被放在 structured 第一筆內容中，fundName 則誤用來源檔名。
+            const candidates = Array.isArray(fund.structured)
+                ? fund.structured
+                    .filter(item => !item.main && !item.sub && !item.subSub)
+                    .map(item => String(item.content || '').replace(/\s+/g, '').trim())
+                    .filter(text => text && text.length <= 40 && /基金$/.test(text))
+                : [];
+
+            if (candidates.length) {
+                return { ...fund, fundName: candidates[0], originalFundName: originalName };
+            }
+            return fund;
+        }
+
+        // 匯入階段就把資料標準化，避免查詢時才因欄位型別異常而中斷。
+        function validateAndNormalizeFund(rawFund, fileName, index) {
+            if (!rawFund || typeof rawFund !== 'object' || Array.isArray(rawFund)) {
+                throw new Error(`第 ${index + 1} 筆不是有效物件`);
+            }
+            const fundName = String(rawFund.fundName ?? '').trim();
+            if (!fundName) throw new Error(`第 ${index + 1} 筆缺少 fundName`);
+            const structured = (Array.isArray(rawFund.structured) ? rawFund.structured : [])
+                .filter(item => item && typeof item === 'object')
+                .map(item => ({
+                    main: String(item.main ?? '').trim(),
+                    sub: String(item.sub ?? '').trim(),
+                    subSub: String(item.subSub ?? '').trim(),
+                    content: String(item.content ?? '')
+                }));
+            if (!structured.length) throw new Error(`第 ${index + 1} 筆（${fundName}）缺少 structured 資料`);
+            return normalizeFundName({
+                fundName,
+                budgetYear: String(rawFund.budgetYear ?? '').trim(),
+                fundType: String(rawFund.fundType ?? '').trim(),
+                sourceFile: String(rawFund.sourceFile ?? fileName).trim(),
+                structured,
+                isDataSet: true
+            });
+        }
+
+        function readJsonFile(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = e => {
+                    try {
+                        const parsed = JSON.parse(e.target.result);
+                        const rows = Array.isArray(parsed) ? parsed
+                            : (parsed && Array.isArray(parsed.funds)) ? parsed.funds
+                            : null;
+                        if (!rows) throw new Error('根層級必須是陣列，或含 funds 陣列的物件');
+                        resolve(rows.map((fund, i) => validateAndNormalizeFund(fund, file.name, i)));
+                    } catch (err) { reject(new Error(`${file.name}：${err.message}`)); }
+                };
+                reader.onerror = () => reject(new Error(`${file.name}：讀取失敗`));
+                reader.readAsText(file);
+            });
+        }
+
+        async function importJsonFiles(fileListInput) {
+            const files = Array.from(fileListInput || []).filter(f => f.name.toLowerCase().endsWith('.json'));
+            if (!files.length) return;
+            loader.style.display = 'block';
+            const results = await Promise.allSettled(files.map(readJsonFile));
+            const incoming = results.filter(r => r.status === 'fulfilled').flatMap(r => r.value);
+            const errors = results.filter(r => r.status === 'rejected').map(r => r.reason.message);
+            // 以「年度＋屬性＋基金名稱」作為紀錄識別碼；同一筆基金若再次匯入，以較新版本取代舊版本。
+            // ponytail: 單純「後蓋前」，不做三選一策略；真要保留多版本再加 UI。
+            const byId = new Map();
+            let replaced = 0;
+            [...window.fundsData, ...incoming].forEach(fund => {
+                const id = [fund.budgetYear || '', fund.fundType || '', fund.fundName || ''].join('||');
+                if (byId.has(id)) replaced++;
+                byId.set(id, fund);
+            });
+            window.fundsData = [...byId.values()];
+            loader.style.display = 'none';
+            globalControlsPanel.style.display = window.pendingFiles.length ? 'flex' : 'none';
+            markDirty();
+            fileList.innerHTML = `<p style="color:var(--success-color)">✓ 已讀取 ${files.length} 個 JSON，讀入 ${incoming.length} 筆，取代重複 ${replaced} 筆，合併後共 ${window.fundsData.length} 筆。</p>` +
+                (errors.length ? `<p style="color:var(--danger-color)">⚠ ${errors.join('<br>')}</p>` : '');
+            if (window.fundsData.length) initializeFilters();
+            updateDataSummary();
+            showToast(errors.length ? `匯入完成，但有 ${errors.length} 個檔案無法讀取` : `成功匯入 ${files.length} 個 JSON 檔案`, !!errors.length);
+        }
+
+        function routeIncomingFiles(inputFiles) {
+            const files = Array.from(inputFiles);
+            const jsonFiles = files.filter(f => f.name.toLowerCase().endsWith('.json'));
+            const sourceFiles = files.filter(f => !f.name.toLowerCase().endsWith('.json'));
+            if (jsonFiles.length) importJsonFiles(jsonFiles);
+            if (sourceFiles.length) handleFiles(sourceFiles);
+        }
+
+        function updateDataSummary() {
+            const box = document.getElementById('data-summary');
+            const years = new Set(window.fundsData.map(f => f.budgetYear).filter(Boolean));
+            const types = new Set(window.fundsData.map(f => f.fundType).filter(Boolean));
+            box.innerHTML = window.fundsData.length
+                ? `<strong>${window.fundsData.length}</strong> 筆基金資料 · <strong>${years.size}</strong> 個年度 · <strong>${types.size}</strong> 種屬性`
+                  + ` <span id="dirty-badge" style="color:var(--danger-color);display:none;">● 有尚未儲存的變更</span>`
+                : '<span>目前資料庫尚無資料</span>';
+            const badge = document.getElementById('dirty-badge');
+            if (badge) badge.style.display = window.isDatabaseDirty ? 'inline' : 'none';
+        }
+
+        function showToast(message, isError = false) {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.className = `toast show${isError ? ' error' : ''}`;
+            clearTimeout(showToast.timer);
+            showToast.timer = setTimeout(() => toast.className = 'toast', 3200);
+        }
+
+        exportJsonBtn.addEventListener('click', () => {
+            if (window.fundsData.length === 0) {
+                alert("目前資料庫沒有可儲存的資料。");
+                return;
+            }
+            const dataToExport = window.fundsData.map(({ isDataSet, ...rest }) => rest);
+            const jsonString = JSON.stringify(dataToExport, null, 2);
+            const blob = new Blob([jsonString], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `基金資料匯出_${new Date().toISOString().slice(0,10)}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            markDirty(false);
+            updateDataSummary();
+            showToast('已儲存 JSON 資料庫');
+        });
+
+        exportExcelBtn.addEventListener('click', () => {
+            const table = document.getElementById('search-results-table');
+            const rows = table.querySelectorAll('tbody > tr');
+            if (rows.length === 0 || (rows.length === 1 && rows[0].children[0].colSpan > 1)) {
+                 alert("沒有可匯出的查詢結果。");
+                return;
+            }
+            
+            const data = [];
+            const header = [];
+            table.querySelectorAll('thead th').forEach(th => header.push(th.textContent));
+            data.push(header);
+
+            rows.forEach(row => {
+                const rowData = [];
+                row.querySelectorAll('td').forEach(td => {
+                    rowData.push(td.textContent);
+                });
+                data.push(rowData);
+            });
+
+            const ws = XLSX.utils.aoa_to_sheet(data);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, "查詢結果");
+            XLSX.writeFile(wb, `查詢結果_${new Date().toISOString().slice(0,10)}.xlsx`);
+        });
+
+        function populatePreviewDropdown() {
+             fundSelector.innerHTML = '<option value="">--- 請選擇 ---</option>';
+             window.fundsData.forEach((fund, index) => {
+                const displayText = `[${fund.budgetYear || 'N/A'}] [${fund.fundType || '作業基金'}] - ${fund.fundName}`;
+                fundSelector.add(new Option(displayText, index));
+             });
+             if(fundSelector.options.length > 1) {
+                fundSelector.selectedIndex = 1;
+                fundSelector.dispatchEvent(new Event('change'));
+             }
+        }
+        
+        fundSelector.addEventListener('change', (e) => {
+            const selectedIndex = e.target.value;
+            if (selectedIndex && window.fundsData[selectedIndex]) {
+                const fund = window.fundsData[selectedIndex];
+                let previewText = `預算年度: ${fund.budgetYear || 'N/A'}\n基金屬性: ${fund.fundType || '作業基金'}\n基金名稱: ${fund.fundName}\n來源檔案: ${fund.sourceFile}\n\n--- 結構化內容 ---\n\n`;
+                fund.structured.forEach(item => {
+                    if (item.main) previewText += `${item.main}\n`;
+                    if (item.sub) previewText += `  ${item.sub}\n`;
+                    if (item.subSub) previewText += `    ${item.subSub}\n`;
+                    if (item.content) previewText += `      --> ${item.content.replace(/\n\s*/g, '\n          ')}\n\n`;
+                    else previewText += `\n`;
+                });
+                fundContentDisplay.textContent = previewText;
+            } else {
+                 fundContentDisplay.textContent = '請從上方選擇一個基金進行預覽。';
+            }
+        });
+        
+        function refreshAvailableYearSelector() {
+            const years = [...new Set(window.fundsData.map(f => String(f.budgetYear || '').trim()).filter(Boolean))]
+                .sort((a, b) => Number(b) - Number(a));
+            const current = yearSelector.value;
+            yearSelector.innerHTML = '';
+            years.forEach(year => yearSelector.add(new Option(year, year)));
+            yearSelector.disabled = years.length === 0;
+            if (!years.length) yearSelector.add(new Option('尚無資料年度', ''));
+            else if (years.includes(current)) yearSelector.value = current;
+        }
+
+        function initializeFilters() {
+            refreshAvailableYearSelector();
+            populatePreviewDropdown();
+            updateAndFilter();
+        }
+        
+        function updateDropdown(selectElement, items, selectedValue, allLabel, cleanFn = null) {
+            selectElement.innerHTML = `<option value="all">${allLabel}</option>`;
+            const uniqueItems = [...new Set(items)].filter(Boolean).sort();
+            
+            uniqueItems.forEach(item => {
+                const optionText = cleanFn ? cleanFn(item) : item;
+                selectElement.add(new Option(optionText, item));
+            });
+            if (Array.from(selectElement.options).some(opt => opt.value === selectedValue)) {
+                selectElement.value = selectedValue;
+            } else {
+                selectElement.value = 'all';
+            }
+        }
+        
+        function updateAndFilter() {
+            const selectedYear = yearFilter.value;
+            const selectedFund = fundFilter.value;
+            const selectedMain = mainTitleFilter.value;
+            const selectedSub = subTitleFilter.value;
+            const selectedSubSub = subSubTitleFilter.value;
+
+            // Step 1: Filter by Year
+            let dataAfterYear = window.fundsData.filter(f => f.isDataSet);
+            if (selectedYear && selectedYear !== 'all') {
+                dataAfterYear = dataAfterYear.filter(f => f.budgetYear === selectedYear);
+            }
+            updateDropdown(yearFilter, window.fundsData.map(f => f.budgetYear), selectedYear, '所有年度', null);
+            
+            // Step 2: Filter by Fund Name
+            let dataAfterFund = dataAfterYear;
+            if (selectedFund && selectedFund !== 'all') {
+                dataAfterFund = dataAfterFund.filter(f => f.fundName === selectedFund);
+            }
+            window.fundsData = window.fundsData.map(normalizeFundName);
+            updateDropdown(fundFilter, dataAfterYear.map(f => normalizeFundName(f).fundName), selectedFund, '所有基金', null);
+            
+            // Step 3: Filter by Main Title
+            let structuredAfterMain = dataAfterFund.flatMap(f => f.structured);
+            if (selectedMain && selectedMain !== 'all') {
+                structuredAfterMain = structuredAfterMain.filter(i => i.main === selectedMain);
+            }
+            updateDropdown(mainTitleFilter, dataAfterFund.flatMap(f => f.structured).map(i => i.main), selectedMain, '所有大標題', cleanTitle);
+            
+            // Step 4: Filter by Sub Title
+            let structuredAfterSub = structuredAfterMain;
+            if (selectedSub && selectedSub !== 'all') {
+                structuredAfterSub = structuredAfterSub.filter(i => i.sub === selectedSub);
+            }
+            updateDropdown(subTitleFilter, structuredAfterMain.map(i => i.sub), selectedSub, '所有中標題', cleanTitle);
+            
+            // Step 5: Filter by Sub-Sub Title
+            let structuredAfterSubSub = structuredAfterSub;
+            if (selectedSubSub && selectedSubSub !== 'all') {
+                structuredAfterSubSub = structuredAfterSubSub.filter(i => i.subSub === selectedSubSub);
+            }
+            updateDropdown(subSubTitleFilter, structuredAfterSub.map(i => i.subSub), selectedSubSub, '所有小標題', cleanTitle);
+            
+            renderTable();
+        }
+        
+        function renderTable() {
+            const selectedYear = yearFilter.value;
+            const selectedFundName = fundFilter.value;
+            const selectedMain = mainTitleFilter.value;
+            const selectedSub = subTitleFilter.value;
+            const selectedSubSub = subSubTitleFilter.value;
+            const keyword = searchKeywordInput.value.trim().toLowerCase();
+            
+            searchResultsBody.innerHTML = '';
+            let found = false;
+            
+            let fundsToSearch = window.fundsData.filter(f => f.isDataSet);
+             if (selectedYear !== 'all') fundsToSearch = fundsToSearch.filter(f => f.budgetYear === selectedYear);
+             if (selectedFundName !== 'all') fundsToSearch = fundsToSearch.filter(f => f.fundName === selectedFundName);
+            
+            fundsToSearch.forEach(fund => {
+                (Array.isArray(fund.structured) ? fund.structured : []).forEach(item => {
+                    const mainTitleMatch = selectedMain === 'all' || item.main === selectedMain;
+                    if (!mainTitleMatch) return;
+
+                    const subTitleMatch = selectedSub === 'all' || item.sub === selectedSub;
+                    if (!subTitleMatch) return;
+
+                    const subSubTitleMatch = selectedSubSub === 'all' || item.subSub === selectedSubSub;
+                    if (!subSubTitleMatch) return;
+                    
+                    const content = String(item.content ?? '');
+                    if (!content.trim()) return;
+                    if (keyword && !content.toLowerCase().includes(keyword)) return;
+                    
+                    found = true;
+
+                    const row = searchResultsBody.insertRow();
+                    row.insertCell().textContent = fund.budgetYear || 'N/A';
+                    row.insertCell().textContent = fund.fundType || '作業基金';
+                    row.insertCell().textContent = fund.fundName;
+                    row.insertCell().textContent = item.main || '';
+                    row.insertCell().textContent = item.sub || '';
+                    row.insertCell().textContent = item.subSub || '';
+                    const pre = document.createElement('pre');
+                    appendHighlightedText(pre, content, keyword);
+                    row.insertCell().appendChild(pre);
+                });
+            });
+
+            if (!found) {
+                searchResultsBody.innerHTML = `<tr><td colspan="7" style="text-align:center;">在此篩選條件下找不到結果。</td></tr>`;
+            }
+        }
+        
+        // 以文字節點建構醒目標示，避免把文件內容當成 HTML 執行。
+        function appendHighlightedText(container, content, keyword) {
+            container.textContent = '';
+            if (!keyword) { container.textContent = content; return; }
+            const lowerContent = content.toLowerCase();
+            const lowerKeyword = keyword.toLowerCase();
+            let start = 0, index;
+            while ((index = lowerContent.indexOf(lowerKeyword, start)) !== -1) {
+                container.appendChild(document.createTextNode(content.slice(start, index)));
+                const mark = document.createElement('mark');
+                mark.className = 'highlight';
+                mark.textContent = content.slice(index, index + keyword.length);
+                container.appendChild(mark);
+                start = index + keyword.length;
+            }
+            container.appendChild(document.createTextNode(content.slice(start)));
+        }
+
+        function cleanTitle(fullTitle) {
+            if (!fullTitle) return '';
+            const match = fullTitle.match(/^[\(（][一二三四五六七八九十]+[\)）]|^[一二三四五六七八九十壹貳參肆伍陸柒捌玖拾]+、|^\d+\./);
+            if (match) {
+                return fullTitle.substring(match[0].length).trim();
+            }
+            return fullTitle;
+        }
+
+        function resizableGrid(table) {
+            const row = table.getElementsByTagName('tr')[0];
+            const cols = row ? row.children : undefined;
+            if (!cols) return;
+        
+            table.style.overflow = 'hidden';
+        
+            for (let i = 0; i < cols.length; i++) {
+                const div = createDiv();
+                cols[i].appendChild(div);
+                setListeners(div);
+            }
+        
+            function setListeners(div) {
+                let pageX, curCol, nxtCol, curColWidth, nxtColWidth;
+        
+                div.addEventListener('mousedown', function(e) {
+                    e.preventDefault(); 
+                    curCol = e.target.parentElement;
+                    nxtCol = curCol.nextElementSibling;
+                    pageX = e.pageX;
+        
+                    const padding = paddingDiff(curCol);
+        
+                    curColWidth = curCol.offsetWidth - padding;
+                    if (nxtCol) nxtColWidth = nxtCol.offsetWidth - padding;
+                });
+        
+                document.addEventListener('mousemove', function(e) {
+                    if (curCol) {
+                        const diffX = e.pageX - pageX;
+                        if (nxtCol) nxtCol.style.width = (nxtColWidth - (diffX)) + 'px';
+                        curCol.style.width = (curColWidth + diffX) + 'px';
+                    }
+                });
+        
+                document.addEventListener('mouseup', function(e) {
+                    curCol = undefined; nxtCol = undefined; pageX = undefined;
+                    nxtColWidth = undefined; curColWidth = undefined;
+                });
+            }
+        
+            function createDiv() {
+                const div = document.createElement('div');
+                div.className = 'resize-handle';
+                return div;
+            }
+        
+            function paddingDiff(col) {
+                const style = window.getComputedStyle(col, null);
+                return parseInt(style.getPropertyValue('padding-left')) + parseInt(style.getPropertyValue('padding-right'));
+            }
+        }
+        
+        document.getElementById('clear-data-btn').addEventListener('click', () => {
+            if (!window.fundsData.length || !confirm('確定要清空目前資料庫嗎？此動作不會刪除已下載的 JSON 備份。')) return;
+            window.fundsData = []; window.pendingFiles = [];
+            fileList.innerHTML = ''; globalControlsPanel.style.display = 'none'; document.getElementById('pending-files-summary').textContent = '請先上傳 PDF 或 DOCX 檔案。';
+            fundSelector.innerHTML = ''; fundContentDisplay.textContent = '請先載入資料。';
+            markDirty(false);
+            refreshAvailableYearSelector(); updateDataSummary(); updateAndFilter(); showToast('已清空目前資料庫');
+        });
+        document.getElementById('reset-filters-btn').addEventListener('click', () => {
+            [yearFilter, fundFilter, mainTitleFilter, subTitleFilter, subSubTitleFilter].forEach(x => x.value = 'all');
+            searchKeywordInput.value = ''; updateAndFilter(); showToast('已重設篩選條件');
+        });
+
+        function setSidebarCollapsed(collapsed) {
+            const main = document.getElementById('main-container');
+            const btn = document.getElementById('sidebar-collapse-btn');
+            main.classList.toggle('sidebar-collapsed', collapsed);
+            btn.setAttribute('aria-expanded', String(!collapsed));
+            btn.title = collapsed ? '展開左側選單' : '收合左側選單';
+            btn.querySelector('.collapse-label').textContent = collapsed ? '展開' : '收合';
+            try { localStorage.setItem('fundToolSidebarCollapsed', collapsed ? '1' : '0'); } catch(e) {}
+        }
+        document.getElementById('sidebar-collapse-btn').addEventListener('click', () => setSidebarCollapsed(!document.getElementById('main-container').classList.contains('sidebar-collapsed')));
+
+        document.addEventListener('DOMContentLoaded', () => {
+            try { setSidebarCollapsed(localStorage.getItem('fundToolSidebarCollapsed') === '1'); } catch(e) { setSidebarCollapsed(false); }
+            checkDependencies();
+            setupDragAndDrop();
+            resizableGrid(document.getElementById('search-results-table'));
+        });
+        
+        const filterControls = document.getElementById('filter-controls');
+        // Dropdown filters trigger filtering immediately
+        filterControls.querySelectorAll('select').forEach(sel => {
+            sel.addEventListener('change', updateAndFilter);
+        });
+        // Keyword search is triggered by button or Enter key
+        searchBtn.addEventListener('click', updateAndFilter);
+        searchKeywordInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                updateAndFilter();
+            }
+        });
+
+    </script>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
