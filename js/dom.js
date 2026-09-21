@@ -4,6 +4,7 @@
 export const dropZone = document.getElementById('drop-zone');
 export const fileInput = document.getElementById('file-input');
 export const jsonInput = document.getElementById('json-input');
+export const autoSaveToggle = document.getElementById('autosave-toggle');
 export const importStrategy = document.getElementById('import-strategy');
 export const importJsonBtn = document.getElementById('import-json-btn');
 export const exportJsonBtn = document.getElementById('export-json-btn');

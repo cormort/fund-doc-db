@@ -1,9 +1,10 @@
 // 介面組裝：分頁、拖放區、欄寬調整、側欄、事件綁定（進入點）
-import { importJsonFiles, updateDataSummary } from './database.js';
-import { dropZone, fileInput, fileList, fundContentDisplay, fundFilter, fundSelector, globalControlsPanel, importJsonBtn, jsonInput, mainTitleFilter, searchBtn, searchKeywordInput, subSubTitleFilter, subTitleFilter, yearFilter } from './dom.js';
+import { importJsonFiles, updateDataSummary, validateAndNormalizeFund } from './database.js';
+import { autoSaveToggle, dropZone, fileInput, fileList, fundContentDisplay, fundFilter, fundSelector, globalControlsPanel, importJsonBtn, jsonInput, mainTitleFilter, searchBtn, searchKeywordInput, subSubTitleFilter, subTitleFilter, yearFilter } from './dom.js';
 import { handleFiles, routeIncomingFiles } from './files.js';
-import { refreshAvailableYearSelector, updateAndFilter } from './query.js';
+import { initializeFilters, refreshAvailableYearSelector, updateAndFilter } from './query.js';
 import { appState, checkDependencies, markDirty, showToast } from './state.js';
+import { autoSaveEnabled, clearSnapshot, loadSnapshot, saveSnapshot, setAutoSaveEnabled } from './storage.js';
 
 export function openTab(evt, tabName) {
     let i, tabcontent, tablinks;
@@ -99,6 +100,7 @@ export function resizableGrid(table) {
 document.getElementById('clear-data-btn').addEventListener('click', () => {
     if (!appState.funds.length || !confirm('確定要清空目前資料庫嗎？此動作不會刪除已下載的 JSON 備份。')) return;
     appState.funds = []; appState.pendingFiles = [];
+    clearSnapshot();
     fileList.innerHTML = ''; globalControlsPanel.style.display = 'none'; document.getElementById('pending-files-summary').textContent = '請先上傳 PDF 或 DOCX 檔案。';
     fundSelector.innerHTML = ''; fundContentDisplay.textContent = '請先載入資料。';
     markDirty(false);
@@ -127,7 +129,32 @@ document.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('.tab-button[data-tab]').forEach(btn =>
         btn.addEventListener('click', evt => openTab(evt, btn.dataset.tab)));
     resizableGrid(document.getElementById('search-results-table'));
+
+    autoSaveToggle.checked = autoSaveEnabled();
+    autoSaveToggle.addEventListener('change', () => {
+        setAutoSaveEnabled(autoSaveToggle.checked);
+        if (autoSaveToggle.checked) { saveSnapshot(); showToast('已開啟本機自動保存'); }
+        else { clearSnapshot(); showToast('已關閉本機自動保存並清除本機備份'); }
+    });
+    restoreSnapshot();
 });
+
+// 開啟自動保存時，重新載入頁面即還原上次的資料庫內容。
+async function restoreSnapshot() {
+    if (!autoSaveEnabled()) return;
+    const snapshot = await loadSnapshot();
+    if (!snapshot || !Array.isArray(snapshot.funds) || !snapshot.funds.length) return;
+    try {
+        appState.funds = snapshot.funds.map((f, i) => validateAndNormalizeFund(f, '本機自動保存', i));
+    } catch (e) {
+        showToast(`本機自動保存內容無法讀取：${e.message}`, true);
+        return;
+    }
+    initializeFilters();
+    updateDataSummary();
+    markDirty(false);
+    showToast(`已還原本機自動保存的 ${appState.funds.length} 筆資料（${new Date(snapshot.savedAt).toLocaleString()}）`);
+}
 
 export const filterControls = document.getElementById('filter-controls');
 // Dropdown filters trigger filtering immediately

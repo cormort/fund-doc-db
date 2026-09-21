@@ -4,6 +4,7 @@ import { confirmSetupBtn, fileList, fundTypeSelector, globalControlsPanel, loade
 import { normalizeFundName, parseDocx, parsePdf } from './parsers.js';
 import { initializeFilters } from './query.js';
 import { appState, markDirty } from './state.js';
+import { saveSnapshot } from './storage.js';
 
 export function handleFiles(files) {
     appState.pendingFiles = Array.from(files).filter(file => ['pdf', 'docx', 'doc'].includes(file.name.split('.').pop().toLowerCase()));
@@ -66,7 +67,7 @@ confirmSetupBtn.addEventListener('click', async () => {
     
     appState.funds.push(...newFunds.map(normalizeFundName));
     appState.pendingFiles = [];
-    if (newFunds.length) markDirty();
+    if (newFunds.length) { markDirty(); saveSnapshot(); }
 
     loader.style.display = 'none';
     if(newFunds.length > 0) {

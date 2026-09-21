@@ -3,6 +3,7 @@ import { exportExcelBtn, exportJsonBtn, fileList, globalControlsPanel, importStr
 import { normalizeFundName } from './parsers.js';
 import { initializeFilters } from './query.js';
 import { appState, markDirty, showToast } from './state.js';
+import { saveSnapshot } from './storage.js';
 
 export const SCHEMA_VERSION = '2.0';
 export const APPLICATION_NAME = '基金文件結構化資料庫';
@@ -107,6 +108,7 @@ export async function importJsonFiles(fileListInput) {
         (errors.length ? `<p style="color:var(--danger-color)">⚠ ${errors.join('<br>')}</p>` : '');
     if (appState.funds.length) initializeFilters();
     updateDataSummary();
+    saveSnapshot();
     showToast(errors.length ? `匯入完成，但有 ${errors.length} 個檔案無法讀取` : `成功匯入 ${files.length} 個 JSON 檔案`, !!errors.length);
 }
 
