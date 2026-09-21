@@ -22,7 +22,7 @@ export function handleFiles(files) {
         document.getElementById('pending-files-summary').textContent = `本批次共 ${appState.pendingFiles.length} 個 PDF／DOCX 待設定與解析。`;
         yearSelector.innerHTML = '<option value="">請先載入資料</option>';
         yearSelector.disabled = true;
-        searchResultsBody.innerHTML = `<tr><td colspan="7" style="text-align:center;">請為新載入的 ${appState.pendingFiles.length} 個基金應用年度和屬性。</td></tr>`;
+        searchResultsBody.innerHTML = `<tr><td colspan="8" style="text-align:center;">請為新載入的 ${appState.pendingFiles.length} 個基金應用年度和屬性。</td></tr>`;
     }
 }
 

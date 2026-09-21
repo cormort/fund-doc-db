@@ -7,7 +7,10 @@ if (window.pdfjsLib) {
 export const appState = {
     funds: [],
     pendingFiles: [],
-    isDirty: false
+    isDirty: false,
+    results: [],
+    page: 1,
+    pageSize: 50
 };
 
 export function markDirty(dirty = true) {

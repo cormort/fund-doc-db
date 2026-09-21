@@ -1,5 +1,5 @@
 // 查詢頁：篩選條件連動、結果渲染、關鍵字醒目標示
-import { fundContentDisplay, fundFilter, fundSelector, mainTitleFilter, searchKeywordInput, searchResultsBody, subSubTitleFilter, subTitleFilter, yearFilter, yearSelector } from './dom.js';
+import { pageSizeSelect, pager, pagerNext, pagerPosition, pagerPrev, pagerSummary, fundContentDisplay, fundFilter, fundSelector, mainTitleFilter, searchKeywordInput, searchResultsBody, subSubTitleFilter, subTitleFilter, yearFilter, yearSelector } from './dom.js';
 import { cleanTitle, normalizeFundName } from './parsers.js';
 import { appState } from './state.js';
 
@@ -111,55 +111,97 @@ export function updateAndFilter() {
     renderTable();
 }
 
-export function renderTable() {
+// 先算出完整結果集合（資料層），畫面只渲染當前頁。
+export function collectResults() {
     const selectedYear = yearFilter.value;
     const selectedFundName = fundFilter.value;
     const selectedMain = mainTitleFilter.value;
     const selectedSub = subTitleFilter.value;
     const selectedSubSub = subSubTitleFilter.value;
     const keyword = searchKeywordInput.value.trim().toLowerCase();
-    
-    searchResultsBody.innerHTML = '';
-    let found = false;
-    
+
     let fundsToSearch = appState.funds.filter(f => f.isDataSet);
-     if (selectedYear !== 'all') fundsToSearch = fundsToSearch.filter(f => f.budgetYear === selectedYear);
-     if (selectedFundName !== 'all') fundsToSearch = fundsToSearch.filter(f => f.fundName === selectedFundName);
-    
+    if (selectedYear !== 'all') fundsToSearch = fundsToSearch.filter(f => f.budgetYear === selectedYear);
+    if (selectedFundName !== 'all') fundsToSearch = fundsToSearch.filter(f => f.fundName === selectedFundName);
+
+    const rows = [];
     fundsToSearch.forEach(fund => {
         (Array.isArray(fund.structured) ? fund.structured : []).forEach(item => {
-            const mainTitleMatch = selectedMain === 'all' || item.main === selectedMain;
-            if (!mainTitleMatch) return;
+            if (selectedMain !== 'all' && item.main !== selectedMain) return;
+            if (selectedSub !== 'all' && item.sub !== selectedSub) return;
+            if (selectedSubSub !== 'all' && item.subSub !== selectedSubSub) return;
 
-            const subTitleMatch = selectedSub === 'all' || item.sub === selectedSub;
-            if (!subTitleMatch) return;
-
-            const subSubTitleMatch = selectedSubSub === 'all' || item.subSub === selectedSubSub;
-            if (!subSubTitleMatch) return;
-            
             const content = String(item.content ?? '');
             if (!content.trim()) return;
             if (keyword && !content.toLowerCase().includes(keyword)) return;
-            
-            found = true;
 
-            const row = searchResultsBody.insertRow();
-            row.insertCell().textContent = fund.budgetYear || 'N/A';
-            row.insertCell().textContent = fund.fundType || '作業基金';
-            row.insertCell().textContent = fund.fundName;
-            row.insertCell().textContent = item.main || '';
-            row.insertCell().textContent = item.sub || '';
-            row.insertCell().textContent = item.subSub || '';
-            const pre = document.createElement('pre');
-            appendHighlightedText(pre, content, keyword);
-            row.insertCell().appendChild(pre);
+            rows.push({
+                budgetYear: fund.budgetYear || 'N/A',
+                fundType: fund.fundType || '作業基金',
+                fundName: fund.fundName,
+                main: item.main || '',
+                sub: item.sub || '',
+                subSub: item.subSub || '',
+                content,
+                source: sourceLabel(fund, item)
+            });
         });
     });
-
-    if (!found) {
-        searchResultsBody.innerHTML = `<tr><td colspan="7" style="text-align:center;">在此篩選條件下找不到結果。</td></tr>`;
-    }
+    return { rows, keyword };
 }
+
+// 來源追溯：檔名（＋頁碼）
+function sourceLabel(fund, item) {
+    const file = fund.sourceFile || '';
+    return item.page ? `${file} p.${item.page}` : file;
+}
+
+export function renderTable() {
+    const { rows } = collectResults();
+    appState.results = rows;
+    appState.page = 1;
+    renderResultPage();
+}
+
+export function renderResultPage() {
+    const keyword = searchKeywordInput.value.trim().toLowerCase();
+    const total = appState.results.length;
+    const pageCount = Math.max(1, Math.ceil(total / appState.pageSize));
+    appState.page = Math.min(Math.max(1, appState.page), pageCount);
+
+    searchResultsBody.innerHTML = '';
+    if (!total) {
+        searchResultsBody.innerHTML = `<tr><td colspan="8" style="text-align:center;">在此篩選條件下找不到結果。</td></tr>`;
+        pager.hidden = true;
+        return;
+    }
+
+    const start = (appState.page - 1) * appState.pageSize;
+    appState.results.slice(start, start + appState.pageSize).forEach(r => {
+        const row = searchResultsBody.insertRow();
+        [r.budgetYear, r.fundType, r.fundName, r.main, r.sub, r.subSub].forEach(v => {
+            row.insertCell().textContent = v;
+        });
+        const pre = document.createElement('pre');
+        appendHighlightedText(pre, r.content, keyword);
+        row.insertCell().appendChild(pre);
+        row.insertCell().textContent = r.source;
+    });
+
+    pager.hidden = false;
+    pagerSummary.textContent = `共 ${total} 筆，顯示第 ${start + 1}–${Math.min(start + appState.pageSize, total)} 筆`;
+    pagerPosition.textContent = `第 ${appState.page} / ${pageCount} 頁`;
+    pagerPrev.disabled = appState.page === 1;
+    pagerNext.disabled = appState.page === pageCount;
+}
+
+pagerPrev.addEventListener('click', () => { appState.page--; renderResultPage(); });
+pagerNext.addEventListener('click', () => { appState.page++; renderResultPage(); });
+pageSizeSelect.addEventListener('change', () => {
+    appState.pageSize = Number(pageSizeSelect.value) || 50;
+    appState.page = 1;
+    renderResultPage();
+});
 
 // 以文字節點建構醒目標示，避免把文件內容當成 HTML 執行。
 export function appendHighlightedText(container, content, keyword) {

@@ -150,25 +150,14 @@ exportJsonBtn.addEventListener('click', () => {
 });
 
 exportExcelBtn.addEventListener('click', () => {
-    const table = document.getElementById('search-results-table');
-    const rows = table.querySelectorAll('tbody > tr');
-    if (rows.length === 0 || (rows.length === 1 && rows[0].children[0].colSpan > 1)) {
-         alert("沒有可匯出的查詢結果。");
+    // 匯出完整查詢結果（不受分頁影響）
+    const rows = appState.results;
+    if (!rows.length) {
+        alert("沒有可匯出的查詢結果。");
         return;
     }
-    
-    const data = [];
-    const header = [];
-    table.querySelectorAll('thead th').forEach(th => header.push(th.textContent));
-    data.push(header);
-
-    rows.forEach(row => {
-        const rowData = [];
-        row.querySelectorAll('td').forEach(td => {
-            rowData.push(td.textContent);
-        });
-        data.push(rowData);
-    });
+    const header = ['年度', '屬性', '基金名稱', '大標題', '中標題', '小標題', '分析說明內容', '來源'];
+    const data = [header, ...rows.map(r => [r.budgetYear, r.fundType, r.fundName, r.main, r.sub, r.subSub, r.content, r.source])];
 
     const ws = XLSX.utils.aoa_to_sheet(data);
     const wb = XLSX.utils.book_new();
