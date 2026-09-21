@@ -56,7 +56,7 @@ export async function parsePdf(file, targetArray, fundType, budgetYear) {
                     warnings.push(`第 ${tablePages.join('、')} 頁疑似表格，維持逐列讀取（未重排欄位），內容可能需人工核對`);
                 }
                 extractData(stripRunningLines(pages, warnings), file.name, targetArray, fundType, budgetYear, warnings,
-                    pages.flatMap(pg => pg.cells));
+                    extractTable(pages.flatMap(pg => pg.cells)));
                 resolve();
             } catch (error) {
                 console.error('解析 PDF 時發生錯誤:', file.name, error);
@@ -250,11 +250,14 @@ export async function parseDocx(file, targetArray, fundType, budgetYear) {
                 const arrayBuffer = event.target.result;
                 const warnings = [];
                 let lines = [];
+                let table = null;
 
                 // 先試 Word 的標題樣式（標題 1／2／3），比純文字正規表示式可靠。
                 try {
                     const html = (await mammoth.convertToHtml({ arrayBuffer })).value;
-                    lines = linesFromHtml(html, warnings);
+                    const doc = new DOMParser().parseFromString(html, 'text/html');
+                    table = tableFromDocument(doc);
+                    lines = linesFromHtml(html, warnings, doc);
                 } catch (e) {
                     warnings.push('Word 樣式解析失敗，改用純文字規則');
                 }
@@ -264,7 +267,7 @@ export async function parseDocx(file, targetArray, fundType, budgetYear) {
                     const raw = await mammoth.extractRawText({ arrayBuffer });
                     lines = toLines(raw.value);
                 }
-                extractData(lines, file.name, targetArray, fundType, budgetYear, warnings);
+                extractData(lines, file.name, targetArray, fundType, budgetYear, warnings, table);
                 resolve();
             } catch (error) {
                 console.error('解析 DOCX 時發生錯誤:', file.name, error);
@@ -277,8 +280,8 @@ export async function parseDocx(file, targetArray, fundType, budgetYear) {
 }
 
 // 將 mammoth 轉出的 HTML 轉成帶階層的行；h1/h2/h3 對應大／中／小標題。
-function linesFromHtml(html, warnings = []) {
-    const doc = new DOMParser().parseFromString(html, 'text/html');
+function linesFromHtml(html, warnings = [], parsed = null) {
+    const doc = parsed || new DOMParser().parseFromString(html, 'text/html');
     if (doc.querySelector('table')) warnings.push('文件含表格，表格內容以文字方式併入');
     const lines = [];
     doc.body.querySelectorAll('h1, h2, h3, h4, h5, h6, p, li, td, th').forEach(node => {
@@ -296,7 +299,7 @@ export function toLines(text) {
         .map(text => ({ text, page: null, level: 0 }));
 }
 
-export function extractData(input, fileName, targetArray, fundType, budgetYear, warnings = [], tableCells = null) {
+export function extractData(input, fileName, targetArray, fundType, budgetYear, warnings = [], sectionTwoTable = null) {
     const regexSet = REGEX_SETS[fundType] || REGEX_SETS['作業基金'];
     const { main: mainTitleRegex, sub: subTitleRegex, subSub: subSubTitleRegex, sectionTwoIdentifier } = regexSet;
 
@@ -325,8 +328,6 @@ export function extractData(input, fileName, targetArray, fundType, budgetYear, 
     let currentMain = '', currentSub = '', currentSubSub = '';
     let contentBuffer = [];
     let sectionPage = allLines[startIndex]?.page ?? null;
-    // 「二、」表格：只有 PDF 帶得出文字座標，Word 仍維持原本的佔位字串。
-    const sectionTwoTable = tableCells ? extractTable(tableCells) : null;
     if (sectionTwoTable && sectionTwoTable.issues.length) {
         warnings.push(`表格有 ${sectionTwoTable.issues.length} 個數值格式異常，請核對：${sectionTwoTable.issues.slice(0, 2).join('、')}`);
     }
@@ -386,7 +387,7 @@ export function extractData(input, fileName, targetArray, fundType, budgetYear, 
         warnings.push('「二、」標題與表格同行，已另外補上表格段落');
     }
 
-    if (tableCells && !sectionTwoTable && structured.some(item => sectionTwoIdentifier.test(item.main))) {
+    if (!sectionTwoTable && structured.some(item => sectionTwoIdentifier.test(item.main) && /略過/.test(item.content))) {
         warnings.push('「二、最近5年主要營運項目」表格無法解析，內容以佔位字串取代');
     }
     if (!structured.some(item => item.main)) warnings.push('未辨識到任何大標題，階層可能不完整');
@@ -540,6 +541,41 @@ export function extractTable(cells) {
 
     if (rendered.length < 2) return null;
     return { text: rendered.join('\n'), issues, rows: rendered.length - 1 };
+}
+
+// Word 的表格帶有真正的儲存格結構，直接讀取即可，不需座標推測。
+function tableFromDocument(doc) {
+    const tables = [...doc.querySelectorAll('table')];
+    const target = tables.find(t => {
+        const first = t.querySelector('tr');
+        return first && /\d{2,3}年度/.test(strip(first.textContent));
+    });
+    if (!target) return null;
+
+    const rows = [...target.querySelectorAll('tr')]
+        .map(tr => [...tr.querySelectorAll('td, th')].flatMap(td => {
+            const span = Number(td.getAttribute('colspan')) || 1;   // 合併儲存格要還原成多欄
+            return [strip(td.textContent), ...Array(span - 1).fill('')];
+        }))
+        .filter(cells => cells.some(c => c));
+    if (rows.length < 2) return null;
+
+    // 續表會重複標題列，只留第一列標題
+    const isHeader = cells => (cells.join('').match(/\d{2,3}年度/g) || []).length >= 2;
+    const body = rows.slice(1).filter(cells => !isHeader(cells));
+    const table = [rows[0], ...body];
+    if (table.length < 2) return null;
+
+    // 只檢查年度欄；項目可能再分子欄、單位欄本來就是文字
+    const issues = [];
+    const yearColumns = table[0].map((label, i) => (/\d{2,3}年度/.test(label) ? i : -1)).filter(i => i >= 0);
+    body.forEach(cells => {
+        yearColumns.forEach(i => {
+            const v = cells[i];
+            if (v && !VALUE_PATTERN.test(v)) issues.push(`${cells[0]}／${table[0][i]}＝${v}`);
+        });
+    });
+    return { text: table.map(cells => cells.join('｜')).join('\n'), issues, rows: table.length - 1 };
 }
 
 export function looksLikeSourceFileName(name) {
