@@ -69,6 +69,13 @@ confirmSetupBtn.addEventListener('click', async () => {
     appState.pendingFiles = [];
     if (newFunds.length) { markDirty(); saveSnapshot(); }
 
+    newFunds.filter(f => f.extractionWarnings?.length).forEach(fund => {
+        const li = document.createElement('p');
+        li.style.color = 'orange';
+        li.textContent = `⚠ ${fund.sourceFile}：${fund.extractionWarnings.join('；')}`;
+        fileList.appendChild(li);
+    });
+
     loader.style.display = 'none';
     if(newFunds.length > 0) {
          initializeFilters();

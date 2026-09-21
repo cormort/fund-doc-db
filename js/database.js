@@ -58,7 +58,8 @@ export function validateAndNormalizeFund(rawFund, fileName, index) {
             main: String(item.main ?? '').trim(),
             sub: String(item.sub ?? '').trim(),
             subSub: String(item.subSub ?? '').trim(),
-            content: String(item.content ?? '')
+            content: String(item.content ?? ''),
+            ...(item.page != null ? { page: Number(item.page) || null } : {})
         }));
     if (!structured.length) throw new Error(`第 ${index + 1} 筆（${fundName}）缺少 structured 資料`);
     return normalizeFundName({
@@ -68,6 +69,9 @@ export function validateAndNormalizeFund(rawFund, fileName, index) {
         sourceFile: String(rawFund.sourceFile ?? fileName).trim(),
         structured,
         ...(rawFund.updatedAt ? { updatedAt: String(rawFund.updatedAt) } : {}),
+        ...(rawFund.fundNameSource ? { fundNameSource: String(rawFund.fundNameSource) } : {}),
+        ...(Array.isArray(rawFund.extractionWarnings) && rawFund.extractionWarnings.length
+            ? { extractionWarnings: rawFund.extractionWarnings.map(String) } : {}),
         isDataSet: true
     });
 }

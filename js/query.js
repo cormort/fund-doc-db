@@ -19,9 +19,12 @@ fundSelector.addEventListener('change', (e) => {
     const selectedIndex = e.target.value;
     if (selectedIndex && appState.funds[selectedIndex]) {
         const fund = appState.funds[selectedIndex];
-        let previewText = `預算年度: ${fund.budgetYear || 'N/A'}\n基金屬性: ${fund.fundType || '作業基金'}\n基金名稱: ${fund.fundName}\n來源檔案: ${fund.sourceFile}\n\n--- 結構化內容 ---\n\n`;
+        let previewText = `預算年度: ${fund.budgetYear || 'N/A'}\n基金屬性: ${fund.fundType || '作業基金'}\n基金名稱: ${fund.fundName}\n來源檔案: ${fund.sourceFile}\n`;
+        if (fund.fundNameSource === 'file-name') previewText += `基金名稱來源: 檔名推定（待確認）\n`;
+        if (fund.extractionWarnings?.length) previewText += `\n⚠ 解析警告:\n${fund.extractionWarnings.map(w => `  ・${w}`).join('\n')}\n`;
+        previewText += `\n--- 結構化內容 ---\n\n`;
         fund.structured.forEach(item => {
-            if (item.main) previewText += `${item.main}\n`;
+            if (item.main) previewText += `${item.main}${item.page ? `（p.${item.page}）` : ''}\n`;
             if (item.sub) previewText += `  ${item.sub}\n`;
             if (item.subSub) previewText += `    ${item.subSub}\n`;
             if (item.content) previewText += `      --> ${item.content.replace(/\n\s*/g, '\n          ')}\n\n`;
