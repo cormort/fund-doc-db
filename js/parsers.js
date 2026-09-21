@@ -34,10 +34,11 @@ export async function parsePdf(file, targetArray, fundType, budgetYear) {
                     const items = (await page.getTextContent()).items.filter(i => i.str.trim());
                     if (!items.length) { emptyPages.push(pageNo); continue; }
 
-                    const { lines, columns, table } = extractPageLines(items, page.getViewport({ scale: 1 }).width);
+                    const viewport = page.getViewport({ scale: 1 });
+                    const { lines, columns, table } = extractPageLines(items, viewport.width);
                     if (columns > 1) twoColumnPages.push(pageNo);
                     if (table) tablePages.push(pageNo);
-                    pages.push({ page: pageNo, lines });
+                    pages.push({ page: pageNo, height: viewport.height, lines });
                 }
 
                 if (emptyPages.length) {
@@ -64,23 +65,23 @@ export async function parsePdf(file, targetArray, fundType, budgetYear) {
 // 將單頁文字片段合併成行；偵測雙欄版面時，左右欄各自成行再依序輸出。
 export function extractPageLines(items, pageWidth) {
     const lineGap = medianHeight(items) * 0.6;
-    const rowWise = () => ({ lines: buildLines(items, lineGap).map(l => l.text), columns: 1 });
+    const rowWise = () => ({ lines: buildLines(items, lineGap).map(({ text, y }) => ({ text, y })), columns: 1 });
 
-    if (detectColumns(items, pageWidth) < 2) return rowWise();
+    const gutter = findGutter(items, pageWidth);
+    if (!gutter) return rowWise();
 
     // 表格同樣有欄間空白，但欄位必須逐列一起讀，重排會拆散同一列資料。
     if (looksLikeTable(items, pageWidth)) return { ...rowWise(), table: true };
 
     // ponytail: 假設跨欄的行是頁面上方標題；若正文中間插入跨欄標題會被排到最前面，
     // 屆時再改成以跨欄行切分區塊（band）處理。
-    const mid = pageWidth / 2;
-    const spanning = items.filter(i => isSpanning(i, pageWidth));
-    const rest = items.filter(i => !isSpanning(i, pageWidth));
-    const left = rest.filter(i => itemCenter(i) < mid);
-    const right = rest.filter(i => itemCenter(i) >= mid);
+    const spanning = items.filter(i => isSpanning(i, pageWidth, gutter));
+    const rest = items.filter(i => !isSpanning(i, pageWidth, gutter));
+    const left = rest.filter(i => itemRight(i) <= gutter.end);
+    const right = rest.filter(i => itemRight(i) > gutter.end);
 
     return {
-        lines: [spanning, left, right].flatMap(group => buildLines(group, lineGap).map(l => l.text)),
+        lines: [spanning, left, right].flatMap(group => buildLines(group, lineGap).map(({ text, y }) => ({ text, y }))),
         columns: 2
     };
 }
@@ -134,8 +135,11 @@ const itemLeft = item => item.transform[4];
 const itemRight = item => item.transform[4] + (item.width || 0);
 const itemCenter = item => (itemLeft(item) + itemRight(item)) / 2;
 
-function isSpanning(item, pageWidth) {
-    return itemLeft(item) < pageWidth * 0.45 && itemRight(item) > pageWidth * 0.55;
+// 跨欄：文字橫跨欄間空白（沒有 gutter 時退回以版面中央帶判斷）
+function isSpanning(item, pageWidth, gutter = null) {
+    const lo = gutter ? gutter.start : pageWidth * 0.45;
+    const hi = gutter ? gutter.end : pageWidth * 0.55;
+    return itemLeft(item) < lo && itemRight(item) > hi;
 }
 
 // 依 Y 座標合併成行；同一行內再依 X 由左至右排列。
@@ -156,40 +160,54 @@ function buildLines(items, lineGap) {
     return lines.map(l => ({ ...l, text: l.text.trim() })).filter(l => l.text);
 }
 
-// 雙欄判定：多數文字行在版面中央留有連續的欄間空白（gutter），而不是被切成兩段的單欄文字。
-// ponytail: 欄間空白小於 2% 頁寬（A4 約 12pt）的緊排雙欄不會被判出，會維持逐列讀取；遇到再依字寬調整門檻。
+// 雙欄判定：版面中央必須有一條「幾乎沒有文字跨越」的連續空白（gutter）。
+// 逐列檢查會被內文的隨機換行空隙誤導，改以整頁掃描中央區域找真正的欄間空白。
+// ponytail: 只處理兩欄；三欄以上或欄寬不對稱的版面會判為單欄（逐列讀取），是安全的退路。
 function detectColumns(items, pageWidth) {
-    if (!pageWidth || items.length < 8) return 1;
-    const mid = pageWidth / 2;
-    const minGutter = pageWidth * 0.02;
+    return findGutter(items, pageWidth) ? 2 : 1;
+}
+
+// 回傳中央區域的欄間空白 { start, end }，找不到則回傳 null。
+function findGutter(items, pageWidth) {
+    if (!pageWidth || items.length < 8) return null;
     const lines = buildLines(items, medianHeight(items) * 0.6);
+    if (lines.length < 6) return null;
 
-    let bothSides = 0, withGutter = 0;
-    lines.forEach(line => {
-        if (line.items.some(i => isSpanning(i, pageWidth))) return;
-        const before = line.items.filter(i => itemRight(i) <= mid);
-        const after = line.items.filter(i => itemLeft(i) >= mid);
-        if (!before.length || !after.length) return;
-        bothSides++;
-        const gutter = Math.min(...after.map(itemLeft)) - Math.max(...before.map(itemRight));
-        if (gutter >= minGutter) withGutter++;
-    });
+    const crossTolerance = Math.max(1, Math.floor(lines.length * 0.1)); // 容許少數跨欄標題
+    const minGutter = pageWidth * 0.02;
+    let best = null;
 
-    if (bothSides < 3 || withGutter / bothSides < 0.8) return 1;
-    const left = items.filter(i => !isSpanning(i, pageWidth) && itemCenter(i) < mid).length;
-    const right = items.filter(i => !isSpanning(i, pageWidth) && itemCenter(i) >= mid).length;
-    return (left >= items.length * 0.25 && right >= items.length * 0.25) ? 2 : 1;
+    for (let x = pageWidth * 0.35; x <= pageWidth * 0.65; x += 2) {
+        const crossing = lines.filter(l => l.items.some(i => itemLeft(i) < x && itemRight(i) > x)).length;
+        if (crossing > crossTolerance) continue;
+
+        const clear = items.filter(i => !(itemLeft(i) < x && itemRight(i) > x));
+        const before = clear.filter(i => itemRight(i) <= x);
+        const after = clear.filter(i => itemLeft(i) >= x);
+        if (before.length < items.length * 0.25 || after.length < items.length * 0.25) continue;
+
+        const start = Math.max(...before.map(itemRight));
+        const end = Math.min(...after.map(itemLeft));
+        if (end - start < minGutter) continue;
+        if (!best || end - start > best.end - best.start) best = { start, end };
+    }
+    return best;
 }
 
 const PAGE_NUMBER_ONLY = /^[\s\-–—第]*\d{1,4}[\s\-–—頁]*$/;
 const runningKey = text => text.replace(/\d+/g, '#').replace(/\s/g, '');
 
 // 移除各頁重複出現的頁首／頁尾與純頁碼行。
+// 只看版面上下緣 12% 範圍內的行，避免把正文首尾誤刪。
 export function stripRunningLines(pages, warnings = []) {
+    const inMargin = (line, height) => {
+        if (line.y == null || !height) return false;
+        return line.y >= height * 0.88 || line.y <= height * 0.12;
+    };
+
     const counts = new Map();
-    pages.forEach(({ lines }) => {
-        [lines[0], lines[lines.length - 1]].forEach(text => {
-            if (!text) return;
+    pages.forEach(({ lines, height }) => {
+        lines.filter(l => inMargin(l, height)).forEach(({ text }) => {
             const key = runningKey(text);
             const seen = counts.get(key) || { count: 0, sample: text };
             seen.count++;
@@ -202,10 +220,11 @@ export function stripRunningLines(pages, warnings = []) {
     const removedSamples = [...counts.entries()].filter(([k]) => repeated.has(k)).map(([, v]) => v.sample);
 
     const out = [];
-    pages.forEach(({ page, lines }) => {
-        lines.forEach((text, i) => {
-            const edge = i === 0 || i === lines.length - 1;
-            if (edge && (repeated.has(runningKey(text)) || PAGE_NUMBER_ONLY.test(text))) return;
+    pages.forEach(({ page, lines, height }) => {
+        lines.forEach(line => {
+            const text = typeof line === 'string' ? line : line.text;
+            const margin = typeof line === 'string' ? false : inMargin(line, height);
+            if (margin && (repeated.has(runningKey(text)) || PAGE_NUMBER_ONLY.test(text))) return;
             out.push({ text, page, level: 0 });
         });
     });
@@ -283,10 +302,11 @@ export function extractData(input, fileName, targetArray, fundType, budgetYear, 
     let startIndex = 0;
 
     for (let i = 0; i < Math.min(allLines.length, 5); i++) {
-        const text = allLines[i].text;
-        if (mainTitleRegex.test(text.replace(/\s/g, ''))) break;
-        if (text.includes('基金')) {
-            fundName = text.replace(/\s/g, '');
+        // 標題常以字距排版（「實 施 平 均 地 權 基 金」），一律先去掉空白再判斷。
+        const normalized = allLines[i].text.replace(/\s/g, '');
+        if (mainTitleRegex.test(normalized)) break;
+        if (normalized.length <= 40 && /基金$/.test(normalized)) {
+            fundName = normalized;
             fundNameSource = 'document-leading-line';
             startIndex = i + 1;
             break;
