@@ -23,38 +23,28 @@ export async function parsePdf(file, targetArray, fundType, budgetYear) {
             try {
                 const pdfData = new Uint8Array(event.target.result);
                 const pdf = await pdfjsLib.getDocument({ data: pdfData }).promise;
-                const lines = [];
                 const warnings = [];
                 const emptyPages = [];
+                const twoColumnPages = [];
+                const pages = [];
 
                 for (let pageNo = 1; pageNo <= pdf.numPages; pageNo++) {
                     const page = await pdf.getPage(pageNo);
                     const items = (await page.getTextContent()).items.filter(i => i.str.trim());
                     if (!items.length) { emptyPages.push(pageNo); continue; }
 
-                    items.sort((a, b) => (b.transform[5] - a.transform[5]) || (a.transform[4] - b.transform[4]));
-
-                    // 以本頁字高中位數推估換行門檻，取代固定 5pt
-                    const heights = items.map(i => Math.abs(i.height || i.transform[3]) || 0).filter(Boolean).sort((a, b) => a - b);
-                    const lineGap = (heights[Math.floor(heights.length / 2)] || 10) * 0.6;
-
-                    let buffer = '';
-                    let lastY = items[0].transform[5];
-                    for (const item of items) {
-                        if (Math.abs(item.transform[5] - lastY) > lineGap) {
-                            if (buffer.trim()) lines.push({ text: buffer.trim(), page: pageNo, level: 0 });
-                            buffer = '';
-                        }
-                        buffer += item.str;
-                        lastY = item.transform[5];
-                    }
-                    if (buffer.trim()) lines.push({ text: buffer.trim(), page: pageNo, level: 0 });
+                    const { lines, columns } = extractPageLines(items, page.getViewport({ scale: 1 }).width);
+                    if (columns > 1) twoColumnPages.push(pageNo);
+                    pages.push({ page: pageNo, lines });
                 }
 
                 if (emptyPages.length) {
                     warnings.push(`第 ${emptyPages.join('、')} 頁沒有可擷取文字（可能為掃描影像或圖表）`);
                 }
-                extractData(lines, file.name, targetArray, fundType, budgetYear, warnings);
+                if (twoColumnPages.length) {
+                    warnings.push(`第 ${twoColumnPages.join('、')} 頁偵測為雙欄版面，已依左欄、右欄順序重排`);
+                }
+                extractData(stripRunningLines(pages, warnings), file.name, targetArray, fundType, budgetYear, warnings);
                 resolve();
             } catch (error) {
                 console.error('解析 PDF 時發生錯誤:', file.name, error);
@@ -64,6 +54,120 @@ export async function parsePdf(file, targetArray, fundType, budgetYear) {
         };
         reader.readAsArrayBuffer(file);
     });
+}
+
+// 將單頁文字片段合併成行；偵測雙欄版面時，左右欄各自成行再依序輸出。
+export function extractPageLines(items, pageWidth) {
+    const lineGap = medianHeight(items) * 0.6;
+    const columns = detectColumns(items, pageWidth);
+
+    if (columns < 2) {
+        return { lines: buildLines(items, lineGap).map(l => l.text), columns: 1 };
+    }
+
+    // ponytail: 假設跨欄的行是頁面上方標題；若正文中間插入跨欄標題會被排到最前面，
+    // 屆時再改成以跨欄行切分區塊（band）處理。
+    const mid = pageWidth / 2;
+    const spanning = items.filter(i => isSpanning(i, pageWidth));
+    const rest = items.filter(i => !isSpanning(i, pageWidth));
+    const left = rest.filter(i => itemCenter(i) < mid);
+    const right = rest.filter(i => itemCenter(i) >= mid);
+
+    return {
+        lines: [spanning, left, right].flatMap(group => buildLines(group, lineGap).map(l => l.text)),
+        columns: 2
+    };
+}
+
+function medianHeight(items) {
+    const heights = items.map(i => Math.abs(i.height || i.transform[3]) || 0).filter(Boolean).sort((a, b) => a - b);
+    return heights[Math.floor(heights.length / 2)] || 10;
+}
+
+const itemLeft = item => item.transform[4];
+const itemRight = item => item.transform[4] + (item.width || 0);
+const itemCenter = item => (itemLeft(item) + itemRight(item)) / 2;
+
+function isSpanning(item, pageWidth) {
+    return itemLeft(item) < pageWidth * 0.45 && itemRight(item) > pageWidth * 0.55;
+}
+
+// 依 Y 座標合併成行；同一行內再依 X 由左至右排列。
+function buildLines(items, lineGap) {
+    const sorted = [...items].sort((a, b) => (b.transform[5] - a.transform[5]) || (itemLeft(a) - itemLeft(b)));
+    const lines = [];
+    let current = null;
+    for (const item of sorted) {
+        const y = item.transform[5];
+        if (!current || Math.abs(y - current.y) > lineGap) {
+            current = { text: '', y, items: [] };
+            lines.push(current);
+        }
+        current.text += item.str;
+        current.items.push(item);
+        current.y = y;
+    }
+    return lines.map(l => ({ ...l, text: l.text.trim() })).filter(l => l.text);
+}
+
+// 雙欄判定：多數文字行在版面中央留有連續的欄間空白（gutter），而不是被切成兩段的單欄文字。
+// ponytail: 兩欄式表格同樣具備 gutter，會被判為雙欄而重排；真的遇到再以表格線或欄數（>2）另外排除。
+function detectColumns(items, pageWidth) {
+    if (!pageWidth || items.length < 8) return 1;
+    const mid = pageWidth / 2;
+    const minGutter = pageWidth * 0.02;
+    const lines = buildLines(items, medianHeight(items) * 0.6);
+
+    let bothSides = 0, withGutter = 0;
+    lines.forEach(line => {
+        if (line.items.some(i => isSpanning(i, pageWidth))) return;
+        const before = line.items.filter(i => itemRight(i) <= mid);
+        const after = line.items.filter(i => itemLeft(i) >= mid);
+        if (!before.length || !after.length) return;
+        bothSides++;
+        const gutter = Math.min(...after.map(itemLeft)) - Math.max(...before.map(itemRight));
+        if (gutter >= minGutter) withGutter++;
+    });
+
+    if (bothSides < 3 || withGutter / bothSides < 0.8) return 1;
+    const left = items.filter(i => !isSpanning(i, pageWidth) && itemCenter(i) < mid).length;
+    const right = items.filter(i => !isSpanning(i, pageWidth) && itemCenter(i) >= mid).length;
+    return (left >= items.length * 0.25 && right >= items.length * 0.25) ? 2 : 1;
+}
+
+const PAGE_NUMBER_ONLY = /^[\s\-–—第]*\d{1,4}[\s\-–—頁]*$/;
+const runningKey = text => text.replace(/\d+/g, '#').replace(/\s/g, '');
+
+// 移除各頁重複出現的頁首／頁尾與純頁碼行。
+export function stripRunningLines(pages, warnings = []) {
+    const counts = new Map();
+    pages.forEach(({ lines }) => {
+        [lines[0], lines[lines.length - 1]].forEach(text => {
+            if (!text) return;
+            const key = runningKey(text);
+            const seen = counts.get(key) || { count: 0, sample: text };
+            seen.count++;
+            counts.set(key, seen);
+        });
+    });
+
+    const threshold = Math.max(3, Math.ceil(pages.length * 0.6));
+    const repeated = new Set([...counts.entries()].filter(([, v]) => v.count >= threshold).map(([k]) => k));
+    const removedSamples = [...counts.entries()].filter(([k]) => repeated.has(k)).map(([, v]) => v.sample);
+
+    const out = [];
+    pages.forEach(({ page, lines }) => {
+        lines.forEach((text, i) => {
+            const edge = i === 0 || i === lines.length - 1;
+            if (edge && (repeated.has(runningKey(text)) || PAGE_NUMBER_ONLY.test(text))) return;
+            out.push({ text, page, level: 0 });
+        });
+    });
+
+    if (removedSamples.length) {
+        warnings.push(`已移除重複頁首／頁尾：${removedSamples.slice(0, 3).join('、')}`);
+    }
+    return out;
 }
 
 export async function parseDocx(file, targetArray, fundType, budgetYear) {
