@@ -375,6 +375,17 @@ export function extractData(input, fileName, targetArray, fundType, budgetYear, 
     pushContent();
 
     const structured = flatData.filter(item => item.main || item.sub || item.subSub || item.content);
+
+    // 「二、」標題若與表格標題列同行而未被辨識為大標題，表格仍要保留，不能靜靜遺失。
+    if (sectionTwoTable && !structured.some(item => sectionTwoIdentifier.test(item.main))) {
+        const heading = allLines.map(l => l.text.replace(/\s/g, '')).find(t => /^二、/.test(t)) || '二、最近5年主要營運項目';
+        structured.push({
+            main: heading.replace(/^(二、[^0-9]*?(?:項目))(.*)$/, '$1'),
+            sub: '', subSub: '', content: sectionTwoTable.text, page: null
+        });
+        warnings.push('「二、」標題與表格同行，已另外補上表格段落');
+    }
+
     if (tableCells && !sectionTwoTable && structured.some(item => sectionTwoIdentifier.test(item.main))) {
         warnings.push('「二、最近5年主要營運項目」表格無法解析，內容以佔位字串取代');
     }
@@ -446,9 +457,19 @@ export function extractTable(cells) {
         if (!byLine.has(key)) byLine.set(key, []);
         byLine.get(key).push(c);
     });
-    const allRows = [...byLine.values()]
-        .map(cs => ({ page: cs[0].page || 1, y: cs[0].y, cells: cs.sort((a, b) => a.x - b.x), txt: strip(cs.map(c => c.s).join('')) }))
-        .sort((a, b) => (a.page - b.page) || (b.y - a.y));
+    const merged = [];
+    [...byLine.values()]
+        .map(cs => ({ page: cs[0].page || 1, y: cs[0].y, cells: cs }))
+        .sort((a, b) => (a.page - b.page) || (b.y - a.y))
+        .forEach(row => {
+            const last = merged[merged.length - 1];
+            if (last && last.page === row.page && Math.abs(last.y - row.y) <= 3) last.cells.push(...row.cells);
+            else merged.push(row);
+        });
+    const allRows = merged.map(r => {
+        const cells = r.cells.sort((a, b) => a.x - b.x);
+        return { page: r.page, y: r.y, cells, txt: strip(cells.map(c => c.s).join('')) };
+    });
 
     // 取出「二、」到「三、」之間的列
     const from = allRows.findIndex(r => /^二、/.test(r.txt));
@@ -463,19 +484,26 @@ export function extractTable(cells) {
     const itemUnitRow = region.find(l => ITEM_UNIT_HEADER.test(l.txt));
     if (!header || !kindRow) return null;
 
-    const kinds = clusterByGap(kindRow.cells, kindRow.txt.match(/決算數|預算數/g).length);
     const years = clusterByGap(header.cells, header.txt.match(/\d{2,3}年度/g).length);
-    if (!kinds || !years || kinds.length !== years.length || kinds.length < 2) return null;
+    if (!years || years.length < 2) return null;
 
-    const anchors = kinds.map(k => k.x);
+    const anchors = years.map(y => y.x);
     const spacing = anchors[1] - anchors[0];
-    const labels = kinds.map((k, i) => strip(years[i].parts.join('')) + strip(k.parts.join('')));
+    // 「決算數／預算數」碎片依最近的年度錨點歸欄，避免另行分群產生錯位
+    const kindParts = anchors.map(() => []);
+    kindRow.cells.forEach(c => {
+        let k = 0;
+        anchors.forEach((a, i) => { if (Math.abs(c.x - a) < Math.abs(c.x - anchors[k])) k = i; });
+        kindParts[k].push(c.s);
+    });
+    const labels = anchors.map((_, i) => strip(years[i].parts.join('')) + strip(kindParts[i].join('')));
     const unitCell = itemUnitRow && itemUnitRow.cells.find(c => strip(c.s).startsWith('單'));
     const unitAnchor = unitCell ? unitCell.x
         : itemUnitRow ? Math.max(...itemUnitRow.cells.map(c => c.x))
         : anchors[0] - 40;
 
-    const body = region.filter(l => l !== header && l !== kindRow && l !== itemUnitRow);
+    const isHeaderRow = l => YEAR_HEADER.test(l.txt) || KIND_HEADER.test(l.txt) || ITEM_UNIT_HEADER.test(l.txt);
+    const body = region.filter(l => !isHeaderRow(l));
     const limit = rowGapLimit(body.slice(1).map((l, i) => body[i].y - l.y));
 
     const groups = [];
@@ -499,8 +527,9 @@ export function extractTable(cells) {
         const unit = join(buckets.unit);
         const values = anchors.map((_, i) => join(buckets[i]));
         if (!item && values.every(v => !v)) return;
-        // 註解列橫跨整個表格寬度，整列合併而不分欄
-        if (/^註/.test(item)) {
+        // 註解與說明文字橫跨整個表格寬度，整列合併而不分欄
+        const noValues = values.every(v => !v || !VALUE_PATTERN.test(v));
+        if (/^註/.test(item) || (noValues && /[、。「」（）]/.test(item + values.join('')))) {
             rendered.push(strip(g.flatMap(l => l.cells).sort((a, b) => (b.y - a.y) || (a.x - b.x)).map(c => c.s).join('')));
             return;
         }
